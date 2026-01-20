@@ -1,5 +1,88 @@
 const { sql } = require("../config/db");
 
+// ==========================================
+//              DROPDOWN DATA
+// ==========================================
+
+// Get Components
+exports.getComponents = async (req, res) => {
+  try {
+    const result = await sql.query("SELECT code, description FROM Component");
+    res.json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch components" });
+  }
+};
+
+// Get Delay Reasons
+exports.getDelayReasons = async (req, res) => {
+  try {
+    const result = await sql.query`
+      SELECT id, reasonName
+      FROM DelaysReason
+      ORDER BY reasonName
+    `;
+    res.status(200).json(result.recordset);
+  } catch (error) {
+    console.error("Error fetching delay reasons:", error);
+    res.status(500).json({ error: "Failed to fetch delay reasons" });
+  }
+};
+
+// Get Employees
+exports.getEmployees = async (req, res) => {
+  try {
+    const result = await sql.query("SELECT id, name FROM Employee");
+    res.json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch employees" });
+  }
+};
+
+// Get Incharges
+exports.getIncharges = async (req, res) => {
+  try {
+    const result = await sql.query("SELECT id, name FROM Incharge");
+    res.json(result.recordset);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch incharges" });
+  }
+};
+
+// Get Supervisors
+exports.getSupervisors = async (req, res) => {
+  try {
+    const result = await sql.query`
+      SELECT id, supervisorName 
+      FROM Supervisors
+      ORDER BY supervisorName
+    `;
+    res.status(200).json(result.recordset);
+  } catch (error) {
+    console.error("Error fetching supervisors:", error);
+    res.status(500).json({ error: "Failed to fetch supervisors" });
+  }
+};
+
+// Get Last Mould Counter
+exports.getLastMouldCounter = async (req, res) => {
+  try {
+    const result = await sql.query`
+      SELECT TOP 1 mouldCounterNo 
+      FROM DisamaticProductReport 
+      ORDER BY reportDate DESC, mouldCounterNo DESC
+    `;
+    const lastMouldCounter = result.recordset[0]?.mouldCounterNo || 0;
+    res.status(200).json({ lastMouldCounter });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Failed to fetch last mould counter" });
+  }
+};
+
+// ==========================================
+//              FORM SUBMISSION
+// ==========================================
 
 exports.createReport = async (req, res) => {
   const {
@@ -59,7 +142,6 @@ exports.createReport = async (req, res) => {
 
     if (delays.length > 0) {
       for (let d of delays) {
-
         const durationTime = `${d.startTime} - ${d.endTime}`;
 
         await sql.query`
@@ -79,19 +161,15 @@ exports.createReport = async (req, res) => {
       }
     }
 
-
     // ---------- SHIFT SEQUENCE ----------
     const shiftOrder = ["I", "II", "III"];
     let currentShiftIndex = shiftOrder.indexOf(shift);
-
     let planDate = new Date(date);
 
     // ---------- INSERT NEXT SHIFT PLANS ----------
     for (let i = 0; i < nextShiftPlans.length; i++) {
-      // move to next shift
       currentShiftIndex++;
 
-      // if shift cycles back to I → increment date
       if (currentShiftIndex >= shiftOrder.length) {
         currentShiftIndex = 0;
         planDate.setDate(planDate.getDate() + 1);
@@ -99,7 +177,6 @@ exports.createReport = async (req, res) => {
 
       const planShift = shiftOrder[currentShiftIndex];
       const formattedPlanDate = planDate.toISOString().split("T")[0];
-
       const plan = nextShiftPlans[i];
 
       await sql.query`
@@ -125,7 +202,6 @@ exports.createReport = async (req, res) => {
     // ---------- INSERT MOULD HARDNESS RECORDS ----------
     for (let i = 0; i < mouldHardness.length; i++) {
       const h = mouldHardness[i];
-
       await sql.query`
         INSERT INTO DisamaticMouldHardness (
           reportId,
@@ -151,7 +227,6 @@ exports.createReport = async (req, res) => {
     // ---------- INSERT PATTERN TEMPERATURE ----------
     for (let i = 0; i < patternTemps.length; i++) {
       const pt = patternTemps[i];
-
       await sql.query`
         INSERT INTO DisamaticPatternTemp (
           reportId,
@@ -170,7 +245,6 @@ exports.createReport = async (req, res) => {
       `;
     }
 
-
     res.status(201).json({
       message: "Report and all Next Shift Plans saved successfully",
     });
@@ -183,23 +257,3 @@ exports.createReport = async (req, res) => {
     });
   }
 };
-
-
-exports.getLastMouldCounter = async (req, res) => {
-  try {
-    const result = await sql.query`
-      SELECT TOP 1 mouldCounterNo 
-      FROM DisamaticProductReport 
-      ORDER BY reportDate DESC, mouldCounterNo DESC
-    `;
-
-    const lastMouldCounter = result.recordset[0]?.mouldCounterNo || 0;
-
-    res.status(200).json({ lastMouldCounter });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Failed to fetch last mould counter" });
-  }
-};
-
-

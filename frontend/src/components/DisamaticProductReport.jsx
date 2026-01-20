@@ -1,14 +1,62 @@
+import React, { useState, useEffect } from "react";
 import axios from "axios";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
-import { useEffect, useState } from "react";
-import SearchableSelect from "./SearchableSelect";
+
+const SearchableSelect = ({ label, options, displayKey, onSelect, required }) => {
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const filtered = options.filter((item) =>
+    item[displayKey]?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="relative">
+      <label className="font-medium">{label}</label>
+
+      <input
+        type="text"
+        required={required}
+        value={search}
+        onChange={(e) => {
+          setSearch(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        className="w-full border p-2 rounded"
+        placeholder={`Search ${label}`}
+      />
+
+      {open && (
+        <ul className="absolute z-10 bg-white border w-full max-h-40 overflow-y-auto rounded shadow">
+          {filtered.length > 0 ? (
+            filtered.map((item, index) => (
+              <li
+                key={index}
+                onClick={() => {
+                  setSearch(item[displayKey]);
+                  setOpen(false);
+                  onSelect(item);
+                }}
+                className="p-2 hover:bg-gray-100 cursor-pointer"
+              >
+                {item[displayKey]}
+              </li>
+            ))
+          ) : (
+            <li className="p-2 text-gray-500">No results found</li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+};
 
 
 const DisamaticProductReport = () => {
-  const [formData, setFormData] = useState({
+  // 1. Defined Initial States for easy resetting
+  const initialFormState = {
     disa: "",
     date: "",
     shift: "",
@@ -25,56 +73,44 @@ const DisamaticProductReport = () => {
     significantEvent: "",
     maintenance: "",
     supervisorName: "",
-  });
+  };
+
+  const [formData, setFormData] = useState(initialFormState);
+
+  // 2. Add a Reset Key to force SearchableSelects to clear visually
+  const [resetKey, setResetKey] = useState(0);
 
   const [incharges, setIncharges] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [components, setComponents] = useState([]);
   const [previousMouldCounter, setPreviousMouldCounter] = useState(0);
+  
   const [nextShiftPlans, setNextShiftPlans] = useState([
-    {
-      componentName: "",
-      plannedMoulds: "",
-      remarks: "",
-    },
+    { componentName: "", plannedMoulds: "", remarks: "" },
   ]);
+  
   const [delays, setDelays] = useState([
-    {
-      delayType: "",
-      startTime: "",
-      endTime: "",
-      duration: 0,
-    },
+    { delayType: "", startTime: "", endTime: "", duration: 0 },
   ]);
+  
   const [delaysMaster, setDelaysMaster] = useState([]);
+  
   const [mouldHardness, setMouldHardness] = useState([
-    {
-      componentName: "",
-      penetrationPP: "",
-      penetrationSP: "",
-      bScalePP: "",
-      bScaleSP: "",
-      remarks: "",
-    },
+    { componentName: "", penetrationPP: "", penetrationSP: "", bScalePP: "", bScaleSP: "", remarks: "" },
   ]);
+  
   const [patternTemps, setPatternTemps] = useState([
-    {
-      componentName: "",
-      pp: "",
-      sp: "",
-      remarks: "",
-    },
+    { componentName: "", pp: "", sp: "", remarks: "" },
   ]);
+  
   const [supervisors, setSupervisors] = useState([]);
 
-
-
+  // --- Calculations ---
   useEffect(() => {
     const { poured, cycleTime } = formData;
 
     if (poured && cycleTime) {
-      const mouldsPerHour =
-        (Number(poured) * Number(cycleTime)) / 3600;
+      const mouldsPerHour = (Number(poured) * Number(cycleTime)) / 3600;
 
       setFormData((prev) => ({
         ...prev,
@@ -83,190 +119,113 @@ const DisamaticProductReport = () => {
     }
   }, [formData.poured, formData.cycleTime]);
 
+  // --- API Calls ---
+  useEffect(() => {
+    const fetchLastCounter = async () => {
+      try {
+        const res = await axios.get(
+          "http://localhost:5000/api/forms/last-mould-counter"
+        );
+        const lastValue = Number(res.data.lastMouldCounter) || 0;
+        setPreviousMouldCounter(lastValue);
+        setFormData((prev) => ({ ...prev, mouldCounterNo: lastValue }));
+      } catch (err) {
+        console.error("Failed to fetch last mould counter", err);
+      }
+    };
+    fetchLastCounter();
+  }, []);
 
   useEffect(() => {
-  const fetchLastCounter = async () => {
-    try {
-      const res = await axios.get(
-        "http://localhost:5000/api/forms/last-mould-counter"
-      );
+    axios.get("http://localhost:5000/api/delays").then((res) => setDelaysMaster(res.data));
+    axios.get("http://localhost:5000/api/incharges").then((res) => setIncharges(res.data));
+    axios.get("http://localhost:5000/api/employees").then((res) => setEmployees(res.data));
+    axios.get("http://localhost:5000/api/components").then((res) => setComponents(res.data));
+    axios.get("http://localhost:5000/api/supervisors").then((res) => setSupervisors(res.data));
+  }, []);
 
-      const lastValue = Number(res.data.lastMouldCounter) || 0;
-
-      setPreviousMouldCounter(lastValue);
-
-      // ✅ sync current counter with previous
-      setFormData((prev) => ({
-        ...prev,
-        mouldCounterNo: lastValue,
-      }));
-
-    } catch (err) {
-      console.error("Failed to fetch last mould counter", err);
+  // --- Handlers ---
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    if (name === "mouldCounterNo") {
+      const current = Number(value);
+      if (isNaN(current) || current < 0 || current > 600000) return;
+      const produced = Math.max(0, current - previousMouldCounter);
+      setFormData((prev) => ({ ...prev, mouldCounterNo: current, produced }));
+      return;
     }
-  };
-
-  fetchLastCounter();
-}, []);
-
-  useEffect(() => {
-    axios
-      .get("http://localhost:5000/api/delays")
-      .then((res) => setDelaysMaster(res.data))
-      .catch((err) =>
-        console.error("Failed to fetch delay reasons", err)
-      );
-  }, []);
-
-
-  useEffect(() => {
-    axios.get("http://localhost:5000/api/incharges")
-      .then(res => setIncharges(res.data));
-
-    axios.get("http://localhost:5000/api/employees")
-      .then(res => setEmployees(res.data));
-
-    axios.get("http://localhost:5000/api/components")
-      .then(res => setComponents(res.data));
-  }, []);
-
-
-  useEffect(() => {
-    axios.get("http://localhost:5000/api/supervisors")
-      .then(res => setSupervisors(res.data))
-      .catch(err => console.error("Failed to fetch supervisors", err));
-  }, []);
-
-
-
-const handleChange = (e) => {
-  const { name, value } = e.target;
-
-  if (name === "mouldCounterNo") {
-    const current = Number(value);
-
-    if (isNaN(current) || current < 0 || current > 600000) return;
-
-    const produced = Math.max(0, current - previousMouldCounter);
-
+    const numericFields = ["poured", "cycleTime"];
     setFormData((prev) => ({
       ...prev,
-      mouldCounterNo: current,
-      produced,
+      [name]: numericFields.includes(name) ? Number(value) : value,
     }));
-
-    return;
-  }
-
-  const numericFields = ["poured", "cycleTime"];
-
-  setFormData((prev) => ({
-    ...prev,
-    [name]: numericFields.includes(name) ? Number(value) : value,
-  }));
-};
-
-const addNextShiftPlan = () => {
-  setNextShiftPlans([
-    ...nextShiftPlans,
-    { componentName: "", plannedMoulds: "", remarks: "" },
-  ]);
-};
-
-const updateNextShiftPlan = (index, field, value) => {
-  const updated = [...nextShiftPlans];
-  updated[index][field] = value;
-  setNextShiftPlans(updated);
-};
-
-const removeNextShiftPlan = (index) => {
-  if (nextShiftPlans.length === 1) return;
-  setNextShiftPlans(nextShiftPlans.filter((_, i) => i !== index));
-};
-
-
-  const addDelay = () => {
-    setDelays([
-      ...delays,
-      {
-        delayType: "",
-        startTime: "",
-        endTime: "",
-        duration: 0,
-      },
-    ]);
   };
 
+  // Next Shift Plan Handlers
+  const addNextShiftPlan = () => {
+    setNextShiftPlans([...nextShiftPlans, { componentName: "", plannedMoulds: "", remarks: "" }]);
+  };
+  const updateNextShiftPlan = (index, field, value) => {
+    const updated = [...nextShiftPlans];
+    updated[index][field] = value;
+    setNextShiftPlans(updated);
+  };
+  const removeNextShiftPlan = (index) => {
+    if (nextShiftPlans.length === 1) return;
+    setNextShiftPlans(nextShiftPlans.filter((_, i) => i !== index));
+  };
+
+  // Delay Handlers
+  const addDelay = () => {
+    setDelays([...delays, { delayType: "", startTime: "", endTime: "", duration: 0 }]);
+  };
   const removeDelay = (index) => {
     setDelays(delays.filter((_, i) => i !== index));
   };
-
   const updateDelay = (index, field, value) => {
     const updated = [...delays];
     updated[index][field] = value;
-
-    // Auto calculate duration
     if (updated[index].startTime && updated[index].endTime) {
       const start = new Date(`1970-01-01T${updated[index].startTime}`);
       const end = new Date(`1970-01-01T${updated[index].endTime}`);
-
-      let diff = (end - start) / 60000; // minutes
-
-      if (diff < 0) diff += 1440; // handles overnight case
-
+      let diff = (end - start) / 60000; 
+      if (diff < 0) diff += 1440;
       updated[index].duration = Math.round(diff);
     } else {
       updated[index].duration = 0;
     }
-
     setDelays(updated);
   };
 
+  // Mould Hardness Handlers
   const addMouldHardness = () => {
-  setMouldHardness([
-    ...mouldHardness,
-    {
-      componentName: "",
-      penetrationPP: "",
-      penetrationSP: "",
-      bScalePP: "",
-      bScaleSP: "",
-      remarks: "",
-    },
-  ]);
-};
-
+    setMouldHardness([...mouldHardness, { componentName: "", penetrationPP: "", penetrationSP: "", bScalePP: "", bScaleSP: "", remarks: "" }]);
+  };
   const removeMouldHardness = (index) => {
     if (mouldHardness.length === 1) return;
     setMouldHardness(mouldHardness.filter((_, i) => i !== index));
   };
-
   const updateMouldHardness = (index, field, value) => {
     const updated = [...mouldHardness];
     updated[index][field] = value;
     setMouldHardness(updated);
   };
 
-    const addPatternTemp = () => {
-    setPatternTemps([
-      ...patternTemps,
-      { componentName: "", pp: "", sp: "", remarks: "" },
-    ]);
+  // Pattern Temp Handlers
+  const addPatternTemp = () => {
+    setPatternTemps([...patternTemps, { componentName: "", pp: "", sp: "", remarks: "" }]);
   };
-
   const updatePatternTemp = (index, field, value) => {
     const updated = [...patternTemps];
     updated[index][field] = value;
     setPatternTemps(updated);
   };
-
   const removePatternTemp = (index) => {
     if (patternTemps.length === 1) return;
     setPatternTemps(patternTemps.filter((_, i) => i !== index));
   };
 
-
-
+  // Submit Handler
   const handleSubmit = async (e) => {
     e.preventDefault();
 
@@ -279,159 +238,35 @@ const removeNextShiftPlan = (index) => {
         patternTemps,
       });
 
-      // ✅ Save current counter as previous
-      setPreviousMouldCounter(formData.mouldCounterNo);
+      // 1. Update previous counter to match what we just submitted
+      const newPreviousCounter = formData.mouldCounterNo;
+      setPreviousMouldCounter(newPreviousCounter);
 
-      setNextShiftPlans([
-        { componentName: "", plannedMoulds: "", remarks: "" },
-      ]);
+      // 2. Reset Main Form Data (keeping mouldCounterNo synced to new previous)
+      setFormData({
+        ...initialFormState,
+        mouldCounterNo: newPreviousCounter, 
+      });
 
-      setPatternTemps([
-        { componentName: "", pp: "", sp: "", remarks: "" },
-      ]);
+      // 3. Reset All Arrays
+      setNextShiftPlans([{ componentName: "", plannedMoulds: "", remarks: "" }]);
+      setDelays([{ delayType: "", startTime: "", endTime: "", duration: 0 }]);
+      setMouldHardness([{ componentName: "", penetrationPP: "", penetrationSP: "", bScalePP: "", bScaleSP: "", remarks: "" }]);
+      setPatternTemps([{ componentName: "", pp: "", sp: "", remarks: "" }]);
 
-      toast.success("Report submitted successfully");
+      // 4. Update Reset Key -> This forces SearchableSelects to re-render and clear their text
+      setResetKey((prev) => prev + 1);
 
+      toast.success("Report submitted and form cleared");
     } catch (err) {
       console.error(err);
       toast.error("Submission failed");
     }
   };
 
-
-  const downloadPDF = () => {
-  const doc = new jsPDF("p", "mm", "a4");
-
-  // ============ PAGE 1 - MAIN REPORT ============
-  doc.setFontSize(16);
-  doc.text("DISAMATIC PRODUCT REPORT", 60, 15);
-
-  doc.setFontSize(10);
-  doc.text(`Disa: ${formData.disa}`, 10, 25);
-  doc.text(`Date: ${formData.date}`, 10, 30);
-  doc.text(`Shift: ${formData.shift}`, 10, 35);
-  doc.text(`Incharge: ${formData.incharge}`, 10, 40);
-
-  autoTable(doc, {
-    startY: 50,
-    head: [["Field", "Value"]],
-    body: [
-      ["Component", formData.componentName || "-"],
-      ["Mould Counter", formData.mouldCounterNo],
-      ["Produced", formData.produced],
-      ["Poured", formData.poured],
-      ["Cycle Time", formData.cycleTime],
-      ["Moulds/Hour", formData.mouldsPerHour],
-      ["Remarks", formData.remarks || "-"],
-    ],
-  });
-
-  // ============ NEXT SHIFT PLAN ============
-  if (nextShiftPlans.length > 0) {
-    doc.addPage();
-    doc.text("NEXT SHIFT PLAN", 80, 15);
-
-    autoTable(doc, {
-      startY: 25,
-      head: [["S.No", "Component", "Planned Moulds", "Remarks"]],
-      body: nextShiftPlans.map((p, i) => [
-        i + 1,
-        p.componentName || "-",
-        p.plannedMoulds || "-",
-        p.remarks || "-",
-      ]),
-    });
-  }
-
-  // ============ DELAYS ============
-  if (delays.length > 0) {
-    doc.addPage();
-    doc.text("DELAYS", 90, 15);
-
-    autoTable(doc, {
-      startY: 25,
-      head: [["S.No", "Delay", "Duration (min)", "Time Range"]],
-      body: delays.map((d, i) => [
-        i + 1,
-        d.delayType || "-",
-        d.duration || 0,
-        d.startTime && d.endTime
-          ? `${d.startTime} - ${d.endTime}`
-          : "-",
-      ]),
-    });
-  }
-
-  // ============ MOULD HARDNESS ============
-  if (mouldHardness.length > 0) {
-    doc.addPage();
-    doc.text("MOULD HARDNESS", 80, 15);
-
-    autoTable(doc, {
-      startY: 25,
-      head: [
-        [
-          "Component",
-          "Penetration PP",
-          "Penetration SP",
-          "B-Scale PP",
-          "B-Scale SP",
-          "Remarks",
-        ],
-      ],
-      body: mouldHardness.map((m) => [
-        m.componentName || "-",
-        m.penetrationPP || "-",
-        m.penetrationSP || "-",
-        m.bScalePP || "-",
-        m.bScaleSP || "-",
-        m.remarks || "-",
-      ]),
-    });
-  }
-
-  // ============ PATTERN TEMPERATURE ============
-  if (patternTemps.length > 0) {
-    doc.addPage();
-    doc.text("PATTERN TEMPERATURE", 70, 15);
-
-    autoTable(doc, {
-      startY: 25,
-      head: [["Component", "PP", "SP", "Remarks"]],
-      body: patternTemps.map((p) => [
-        p.componentName || "-",
-        p.pp || "-",
-        p.sp || "-",
-        p.remarks || "-",
-      ]),
-    });
-  }
-
-  // ============ OTHER DETAILS ============
-  doc.addPage();
-  doc.text("OTHER DETAILS", 80, 15);
-
-  autoTable(doc, {
-    startY: 25,
-    head: [["Field", "Value"]],
-    body: [
-      ["Supervisor", formData.supervisorName || "-"],
-      ["Maintenance", formData.maintenance || "-"],
-      ["Significant Event", formData.significantEvent || "-"],
-    ],
-  });
-
-  doc.save(`Disamatic_Report_${formData.date || "Report"}.pdf`);
-};
-
-
   return (
     <div>
-      <ToastContainer
-      position="top-right"
-      autoClose={3000}
-      theme="colored"
-    />
+      <ToastContainer position="top-right" autoClose={3000} theme="colored" />
       <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
         <form
           onSubmit={handleSubmit}
@@ -444,8 +279,13 @@ const removeNextShiftPlan = (index) => {
           {/* DISA */}
           <div>
             <label className="font-medium">DISA-</label>
-            <select name="disa" required onChange={handleChange}
-              className="w-full border p-2 rounded">
+            <select
+              name="disa"
+              required
+              value={formData.disa}
+              onChange={handleChange}
+              className="w-full border p-2 rounded"
+            >
               <option value="">Select</option>
               <option value="I">I</option>
               <option value="II">II</option>
@@ -456,16 +296,26 @@ const removeNextShiftPlan = (index) => {
           {/* Date */}
           <div>
             <label className="font-medium">Date</label>
-            <input type="date" name="date" required
+            <input
+              type="date"
+              name="date"
+              required
+              value={formData.date}
               onChange={handleChange}
-              className="w-full border p-2 rounded" />
+              className="w-full border p-2 rounded"
+            />
           </div>
 
           {/* Shift */}
           <div>
             <label className="font-medium">Shift</label>
-            <select name="shift" required onChange={handleChange}
-              className="w-full border p-2 rounded">
+            <select
+              name="shift"
+              required
+              value={formData.shift}
+              onChange={handleChange}
+              className="w-full border p-2 rounded"
+            >
               <option value="">Select</option>
               <option value="I">I</option>
               <option value="II">II</option>
@@ -476,6 +326,7 @@ const removeNextShiftPlan = (index) => {
           {/* Incharge */}
           <div>
             <SearchableSelect
+              key={`incharge-${resetKey}`}
               label="Incharge"
               options={incharges}
               displayKey="name"
@@ -484,13 +335,13 @@ const removeNextShiftPlan = (index) => {
                 setFormData({ ...formData, incharge: item.name })
               }
             />
-
           </div>
 
           {/* Members */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <SearchableSelect
+                key={`member1-${resetKey}`}
                 label="Member 1"
                 options={employees}
                 displayKey="name"
@@ -503,6 +354,7 @@ const removeNextShiftPlan = (index) => {
 
             <div>
               <SearchableSelect
+                key={`member2-${resetKey}`}
                 label="Member 2"
                 options={employees}
                 displayKey="name"
@@ -535,6 +387,7 @@ const removeNextShiftPlan = (index) => {
 
             <div>
               <SearchableSelect
+                key={`comp-${resetKey}`}
                 label="Component Name"
                 options={components}
                 displayKey="description"
@@ -548,7 +401,6 @@ const removeNextShiftPlan = (index) => {
                 }
               />
             </div>
-
           </div>
 
           {/* Produced / Poured */}
@@ -566,9 +418,14 @@ const removeNextShiftPlan = (index) => {
 
             <div>
               <label className="font-medium">Poured</label>
-              <input type="number" name="poured" required
+              <input
+                type="number"
+                name="poured"
+                required
+                value={formData.poured}
                 onChange={handleChange}
-                className="w-full border p-2 rounded" />
+                className="w-full border p-2 rounded"
+              />
             </div>
           </div>
 
@@ -576,9 +433,14 @@ const removeNextShiftPlan = (index) => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="font-medium">Cycle Time</label>
-              <input type="number" name="cycleTime" required
+              <input
+                type="number"
+                name="cycleTime"
+                required
+                value={formData.cycleTime}
                 onChange={handleChange}
-                className="w-full border p-2 rounded" />
+                className="w-full border p-2 rounded"
+              />
             </div>
 
             <div>
@@ -591,26 +453,23 @@ const removeNextShiftPlan = (index) => {
                 className="w-full border p-2 rounded bg-gray-100 cursor-not-allowed"
               />
             </div>
-
           </div>
 
           {/* Remarks */}
           <div>
             <label className="font-medium">Remarks</label>
-            <textarea name="remarks"
+            <textarea
+              name="remarks"
+              value={formData.remarks}
               onChange={handleChange}
-              className="w-full border p-2 rounded" />
+              className="w-full border p-2 rounded"
+            />
           </div>
 
           {/* Next Shift Plan Section */}
           <div className="mt-6">
-
-            {/* Title + PLUS BUTTON */}
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">
-                Next Shift Plan :
-              </h2>
-
+              <h2 className="text-lg font-semibold">Next Shift Plan :</h2>
               <button
                 type="button"
                 onClick={addNextShiftPlan}
@@ -627,7 +486,6 @@ const removeNextShiftPlan = (index) => {
               >
                 <div className="flex justify-between items-center">
                   <h3 className="font-medium">Plan {index + 1}</h3>
-
                   {nextShiftPlans.length > 1 && (
                     <button
                       type="button"
@@ -639,8 +497,8 @@ const removeNextShiftPlan = (index) => {
                   )}
                 </div>
 
-                {/* Component */}
                 <SearchableSelect
+                  key={`nextPlan-${index}-${resetKey}`}
                   label="Component Name"
                   options={components}
                   displayKey="description"
@@ -650,7 +508,6 @@ const removeNextShiftPlan = (index) => {
                   }
                 />
 
-                {/* Planned Moulds */}
                 <div>
                   <label className="font-medium">Planned Moulds *</label>
                   <input
@@ -665,7 +522,6 @@ const removeNextShiftPlan = (index) => {
                   />
                 </div>
 
-                {/* Remarks */}
                 <div>
                   <label className="font-medium">Remarks</label>
                   <textarea
@@ -680,14 +536,10 @@ const removeNextShiftPlan = (index) => {
             ))}
           </div>
 
-
           {/* ================= DELAYS SECTION ================= */}
           <div className="mt-6">
-
-            {/* Title + Add Button */}
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Delays :</h2>
-
               <button
                 type="button"
                 onClick={addDelay}
@@ -704,7 +556,6 @@ const removeNextShiftPlan = (index) => {
               >
                 <div className="flex justify-between items-center">
                   <h3 className="font-medium">Delay {index + 1}</h3>
-
                   {delays.length > 1 && (
                     <button
                       type="button"
@@ -716,10 +567,10 @@ const removeNextShiftPlan = (index) => {
                   )}
                 </div>
 
-                {/* Delay Type */}
                 <SearchableSelect
+                  key={`delay-${index}-${resetKey}`}
                   label="Delay"
-                  options={delaysMaster}   // ⬅️ your delay master list
+                  options={delaysMaster}
                   displayKey="reasonName"
                   required
                   onSelect={(item) =>
@@ -727,7 +578,6 @@ const removeNextShiftPlan = (index) => {
                   }
                 />
 
-                {/* Start & End Time */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="font-medium">Start Time</label>
@@ -741,7 +591,6 @@ const removeNextShiftPlan = (index) => {
                       className="w-full border p-2 rounded"
                     />
                   </div>
-
                   <div>
                     <label className="font-medium">End Time</label>
                     <input
@@ -756,7 +605,6 @@ const removeNextShiftPlan = (index) => {
                   </div>
                 </div>
 
-                {/* Duration */}
                 <div>
                   <label className="font-medium">Duration (Minutes)</label>
                   <input
@@ -772,10 +620,8 @@ const removeNextShiftPlan = (index) => {
 
           {/* ================= MOULD HARDNESS SECTION ================= */}
           <div className="mt-6">
-
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Mould Hardness :</h2>
-
               <button
                 type="button"
                 onClick={addMouldHardness}
@@ -792,7 +638,6 @@ const removeNextShiftPlan = (index) => {
               >
                 <div className="flex justify-between items-center">
                   <h3 className="font-medium">Mould Hardness {index + 1}</h3>
-
                   {mouldHardness.length > 1 && (
                     <button
                       type="button"
@@ -804,8 +649,8 @@ const removeNextShiftPlan = (index) => {
                   )}
                 </div>
 
-                {/* Component Name */}
                 <SearchableSelect
+                  key={`hardness-${index}-${resetKey}`}
                   label="Component Name"
                   options={components}
                   displayKey="description"
@@ -815,11 +660,9 @@ const removeNextShiftPlan = (index) => {
                   }
                 />
 
-                {/* ---------- Penetration Tester ---------- */}
                 <h3 className="font-semibold mt-2">
                   Mould Penetration Tester (N/cm²)
                 </h3>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="font-medium">PP *</label>
@@ -829,16 +672,11 @@ const removeNextShiftPlan = (index) => {
                       required
                       value={item.penetrationPP}
                       onChange={(e) =>
-                        updateMouldHardness(
-                          index,
-                          "penetrationPP",
-                          e.target.value
-                        )
+                        updateMouldHardness(index, "penetrationPP", e.target.value)
                       }
                       className="w-full border p-2 rounded"
                     />
                   </div>
-
                   <div>
                     <label className="font-medium">SP *</label>
                     <input
@@ -847,20 +685,14 @@ const removeNextShiftPlan = (index) => {
                       required
                       value={item.penetrationSP}
                       onChange={(e) =>
-                        updateMouldHardness(
-                          index,
-                          "penetrationSP",
-                          e.target.value
-                        )
+                        updateMouldHardness(index, "penetrationSP", e.target.value)
                       }
                       className="w-full border p-2 rounded"
                     />
                   </div>
                 </div>
 
-                {/* ---------- B-Scale ---------- */}
                 <h3 className="font-semibold mt-2">B-Scale</h3>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="font-medium">PP *</label>
@@ -875,7 +707,6 @@ const removeNextShiftPlan = (index) => {
                       className="w-full border p-2 rounded"
                     />
                   </div>
-
                   <div>
                     <label className="font-medium">SP *</label>
                     <input
@@ -891,7 +722,6 @@ const removeNextShiftPlan = (index) => {
                   </div>
                 </div>
 
-                {/* Remarks */}
                 <div>
                   <label className="font-medium">Remarks</label>
                   <textarea
@@ -908,12 +738,8 @@ const removeNextShiftPlan = (index) => {
 
           {/* ================= PATTERN TEMPERATURE SECTION ================= */}
           <div className="mt-6">
-
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">
-                Pattern Temp. (°C) :
-              </h2>
-
+              <h2 className="text-lg font-semibold">Pattern Temp. (°C) :</h2>
               <button
                 type="button"
                 onClick={addPatternTemp}
@@ -930,7 +756,6 @@ const removeNextShiftPlan = (index) => {
               >
                 <div className="flex justify-between items-center">
                   <h3 className="font-medium">Pattern Temp {index + 1}</h3>
-
                   {patternTemps.length > 1 && (
                     <button
                       type="button"
@@ -942,8 +767,8 @@ const removeNextShiftPlan = (index) => {
                   )}
                 </div>
 
-                {/* Component Name */}
                 <SearchableSelect
+                  key={`patternTemp-${index}-${resetKey}`}
                   label="Item (Component)"
                   options={components}
                   displayKey="description"
@@ -953,7 +778,6 @@ const removeNextShiftPlan = (index) => {
                   }
                 />
 
-                {/* PP and SP */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="font-medium">PP *</label>
@@ -968,7 +792,6 @@ const removeNextShiftPlan = (index) => {
                       className="w-full border p-2 rounded"
                     />
                   </div>
-
                   <div>
                     <label className="font-medium">SP *</label>
                     <input
@@ -984,7 +807,6 @@ const removeNextShiftPlan = (index) => {
                   </div>
                 </div>
 
-                {/* Remarks */}
                 <div>
                   <label className="font-medium">Remarks</label>
                   <textarea
@@ -1001,32 +823,31 @@ const removeNextShiftPlan = (index) => {
 
           {/* ================= OTHER DETAILS ================= */}
           <div className="mt-6 border-t pt-6">
-
-            {/* Significant Event */}
             <div>
               <label className="font-medium">Significant Event</label>
               <textarea
                 name="significantEvent"
+                value={formData.significantEvent}
                 onChange={handleChange}
                 className="w-full border p-2 rounded"
                 placeholder="Enter any significant event..."
               />
             </div>
 
-            {/* Maintenance */}
             <div className="mt-4">
               <label className="font-medium">Maintenance</label>
               <textarea
                 name="maintenance"
+                value={formData.maintenance}
                 onChange={handleChange}
                 className="w-full border p-2 rounded"
                 placeholder="Enter maintenance details..."
               />
             </div>
 
-            {/* Supervisor Name */}
             <div className="mt-4">
               <SearchableSelect
+                key={`supervisor-${resetKey}`}
                 label="Supervisor Name"
                 options={supervisors}
                 displayKey="supervisorName"
@@ -1038,17 +859,11 @@ const removeNextShiftPlan = (index) => {
             </div>
           </div>
 
-          <button type="submit"
-            className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
-            Submit Report
-          </button>
-
           <button
-            type="button"
-            onClick={downloadPDF}
-            className="bg-blue-600 text-white px-4 py-2 rounded mt-4"
+            type="submit"
+            className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
           >
-            Download Report (PDF)
+            Submit Report
           </button>
         </form>
       </div>
