@@ -115,19 +115,6 @@ const DisamaticProductReport = () => {
   
   const [supervisors, setSupervisors] = useState([]);
 
-  // --- Calculations ---
-  useEffect(() => {
-    const { poured, cycleTime } = formData;
-
-    if (poured && cycleTime) {
-      const mouldsPerHour = (Number(poured) * Number(cycleTime)) / 3600;
-
-      setFormData((prev) => ({
-        ...prev,
-        mouldsPerHour: mouldsPerHour.toFixed(2),
-      }));
-    }
-  }, [formData.poured, formData.cycleTime]);
 
   // --- API Calls ---
   useEffect(() => {
@@ -252,26 +239,32 @@ const DisamaticProductReport = () => {
   };
 
   const updateProduction = (index, field, value) => {
-    const updated = [...productions];
-    
-    if (field === "mouldCounterNo") {
-      updated[index][field] = value;
-      // Trigger recalculation of the whole chain when a counter changes
-      recalculateChain(updated);
-    } 
-    else if (field === "poured" || field === "cycleTime") {
-      updated[index][field] = value;
-      // Calculate Moulds Per Hour
-      const p = field === "poured" ? Number(value) : Number(updated[index].poured);
-      const c = field === "cycleTime" ? Number(value) : Number(updated[index].cycleTime);
-      if (p && c) updated[index].mouldsPerHour = ((p * c) / 3600).toFixed(2);
-      setProductions(updated);
-    } 
-    else {
-      updated[index][field] = value;
-      setProductions(updated);
-    }
-  };
+      const updated = [...productions];
+      
+      if (field === "mouldCounterNo") {
+        updated[index][field] = value;
+        // Trigger recalculation of the whole chain when a counter changes
+        recalculateChain(updated);
+      } 
+      else if (field === "poured" || field === "cycleTime") {
+        updated[index][field] = value;
+        
+        // Calculate Moulds Per Hour
+        const p = field === "poured" ? Number(value) : Number(updated[index].poured);
+        const c = field === "cycleTime" ? Number(value) : Number(updated[index].cycleTime);
+        
+        if (p && c) {
+          // CHANGED: Use Math.round() to get a whole number instead of .toFixed(2)
+          updated[index].mouldsPerHour = Math.round((p * c) / 3600);
+        }
+        
+        setProductions(updated);
+      } 
+      else {
+        updated[index][field] = value;
+        setProductions(updated);
+      }
+    };
 
   // Helper: Recalculates 'produced' for every row based on the previous row's counter
   const recalculateChain = (list) => {
@@ -755,12 +748,14 @@ const DisamaticProductReport = () => {
                 <h3 className="font-semibold mt-2">
                   Mould Penetration Tester (N/cm²)
                 </h3>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="font-medium">PP *</label>
                     <input
                       type="number"
                       min={20}
+                      step="0.01"  // <--- ALLOWS DECIMALS
                       required
                       value={item.penetrationPP}
                       onChange={(e) =>
@@ -774,6 +769,7 @@ const DisamaticProductReport = () => {
                     <input
                       type="number"
                       min={20}
+                      step="0.01"  // <--- ALLOWS DECIMALS
                       required
                       value={item.penetrationSP}
                       onChange={(e) =>
