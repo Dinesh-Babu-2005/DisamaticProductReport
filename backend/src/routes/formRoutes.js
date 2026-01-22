@@ -8,6 +8,7 @@ router.get("/delays", formController.getDelayReasons);
 router.get("/employees", formController.getEmployees);
 router.get("/incharges", formController.getIncharges);
 router.get("/supervisors", formController.getSupervisors);
+router.get("/operators", formController.getOperators);
 
 // --- Form Transaction Routes ---
 router.get("/forms/last-mould-counter", formController.getLastMouldCounter);

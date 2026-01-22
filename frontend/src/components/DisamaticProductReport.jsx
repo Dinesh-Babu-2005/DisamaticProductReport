@@ -63,17 +63,26 @@ const DisamaticProductReport = () => {
     incharge: "",
     member1: "",
     member2: "",
-    componentName: "",
-    mouldCounterNo: 0,
-    produced: 0,
-    poured: "",
-    cycleTime: "",
-    mouldsPerHour: "",
-    remarks: "",
+    ppOperator: "", 
     significantEvent: "",
     maintenance: "",
     supervisorName: "",
   };
+
+  // ... existing formData state (keep only general fields like date, shift, incharge, etc.)
+
+  // NEW: State for multiple production entries
+  const [productions, setProductions] = useState([
+    {
+      componentName: "",
+      mouldCounterNo: "",
+      produced: 0,
+      poured: "",
+      cycleTime: "",
+      mouldsPerHour: "",
+      remarks: ""
+    }
+  ]);
 
   const [formData, setFormData] = useState(initialFormState);
 
@@ -82,6 +91,7 @@ const DisamaticProductReport = () => {
 
   const [incharges, setIncharges] = useState([]);
   const [employees, setEmployees] = useState([]);
+  const [operators, setOperators] = useState([]);
   const [components, setComponents] = useState([]);
   const [previousMouldCounter, setPreviousMouldCounter] = useState(0);
   
@@ -140,6 +150,7 @@ const DisamaticProductReport = () => {
     axios.get("http://localhost:5000/api/delays").then((res) => setDelaysMaster(res.data));
     axios.get("http://localhost:5000/api/incharges").then((res) => setIncharges(res.data));
     axios.get("http://localhost:5000/api/employees").then((res) => setEmployees(res.data));
+    axios.get("http://localhost:5000/api/operators").then((res) => setOperators(res.data));
     axios.get("http://localhost:5000/api/components").then((res) => setComponents(res.data));
     axios.get("http://localhost:5000/api/supervisors").then((res) => setSupervisors(res.data));
   }, []);
@@ -225,13 +236,65 @@ const DisamaticProductReport = () => {
     setPatternTemps(patternTemps.filter((_, i) => i !== index));
   };
 
+  // --- PRODUCTION HANDLERS ---
+  const addProduction = () => {
+    setProductions([
+      ...productions,
+      { componentName: "", mouldCounterNo: "", produced: 0, poured: "", cycleTime: "", mouldsPerHour: "", remarks: "" }
+    ]);
+  };
+
+  const removeProduction = (index) => {
+    if (productions.length === 1) return;
+    const updated = productions.filter((_, i) => i !== index);
+    // Recalculate produced values for the remaining list to keep math correct
+    recalculateChain(updated);
+  };
+
+  const updateProduction = (index, field, value) => {
+    const updated = [...productions];
+    
+    if (field === "mouldCounterNo") {
+      updated[index][field] = value;
+      // Trigger recalculation of the whole chain when a counter changes
+      recalculateChain(updated);
+    } 
+    else if (field === "poured" || field === "cycleTime") {
+      updated[index][field] = value;
+      // Calculate Moulds Per Hour
+      const p = field === "poured" ? Number(value) : Number(updated[index].poured);
+      const c = field === "cycleTime" ? Number(value) : Number(updated[index].cycleTime);
+      if (p && c) updated[index].mouldsPerHour = ((p * c) / 3600).toFixed(2);
+      setProductions(updated);
+    } 
+    else {
+      updated[index][field] = value;
+      setProductions(updated);
+    }
+  };
+
+  // Helper: Recalculates 'produced' for every row based on the previous row's counter
+  const recalculateChain = (list) => {
+    let prev = previousMouldCounter; // Start with the fetched DB counter
+    const newList = list.map((item) => {
+      const current = Number(item.mouldCounterNo) || 0;
+      // Produced = Current Counter - Previous Counter (min 0)
+      const produced = current ? Math.max(0, current - prev) : 0;
+      if (current) prev = current; // Update 'prev' for the next iteration
+      return { ...item, produced };
+    });
+    setProductions(newList);
+  };
+
   // Submit Handler
   const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
+      // Send 'productions' array instead of individual fields
       await axios.post("http://localhost:5000/api/forms", {
         ...formData,
+        productions, 
         delays,
         nextShiftPlans,
         mouldHardness,
@@ -239,16 +302,26 @@ const DisamaticProductReport = () => {
       });
 
       // 1. Update previous counter to match what we just submitted
-      const newPreviousCounter = formData.mouldCounterNo;
+      const lastItem = productions[productions.length - 1];
+      const newPreviousCounter = lastItem.mouldCounterNo 
+        ? Number(lastItem.mouldCounterNo) 
+        : previousMouldCounter;
+        
       setPreviousMouldCounter(newPreviousCounter);
 
       // 2. Reset Main Form Data (keeping mouldCounterNo synced to new previous)
-      setFormData({
-        ...initialFormState,
-        mouldCounterNo: newPreviousCounter, 
-      });
+      setFormData(initialFormState);
 
       // 3. Reset All Arrays
+      setProductions([{ 
+        componentName: "", 
+        mouldCounterNo: "", 
+        produced: 0, 
+        poured: "", 
+        cycleTime: "", 
+        mouldsPerHour: "", 
+        remarks: "" 
+      }]);
       setNextShiftPlans([{ componentName: "", plannedMoulds: "", remarks: "" }]);
       setDelays([{ delayType: "", startTime: "", endTime: "", duration: 0 }]);
       setMouldHardness([{ componentName: "", penetrationPP: "", penetrationSP: "", bScalePP: "", bScaleSP: "", remarks: "" }]);
@@ -366,104 +439,123 @@ const DisamaticProductReport = () => {
             </div>
           </div>
 
-          {/* Production */}
-          <h2 className="text-lg font-semibold mt-4">Production :</h2>
-
-          {/* Component + Counter */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="font-medium">Mould Counter No.</label>
-              <input
-                type="number"
-                name="mouldCounterNo"
-                min={0}
-                max={600000}
-                value={formData.mouldCounterNo}
-                required
-                onChange={handleChange}
-                className="w-full border p-2 rounded"
-              />
-            </div>
-
-            <div>
-              <SearchableSelect
-                key={`comp-${resetKey}`}
-                label="Component Name"
-                options={components}
-                displayKey="description"
-                required
-                onSelect={(item) =>
-                  setFormData({
-                    ...formData,
-                    componentName: item.description,
-                    componentCode: item.code,
-                  })
-                }
-              />
-            </div>
-          </div>
-
-          {/* Produced / Poured */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="font-medium">Produced</label>
-              <input
-                type="number"
-                name="produced"
-                value={formData.produced}
-                readOnly
-                className="w-full border p-2 rounded bg-gray-100 cursor-not-allowed"
-              />
-            </div>
-
-            <div>
-              <label className="font-medium">Poured</label>
-              <input
-                type="number"
-                name="poured"
-                required
-                value={formData.poured}
-                onChange={handleChange}
-                className="w-full border p-2 rounded"
-              />
-            </div>
-          </div>
-
-          {/* Cycle Time + Moulds Per Hour */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="font-medium">Cycle Time</label>
-              <input
-                type="number"
-                name="cycleTime"
-                required
-                value={formData.cycleTime}
-                onChange={handleChange}
-                className="w-full border p-2 rounded"
-              />
-            </div>
-
-            <div>
-              <label className="font-medium">Moulds Per Hour</label>
-              <input
-                type="number"
-                name="mouldsPerHour"
-                value={formData.mouldsPerHour}
-                readOnly
-                className="w-full border p-2 rounded bg-gray-100 cursor-not-allowed"
-              />
-            </div>
-          </div>
-
-          {/* Remarks */}
-          <div>
-            <label className="font-medium">Remarks</label>
-            <textarea
-              name="remarks"
-              value={formData.remarks}
-              onChange={handleChange}
-              className="w-full border p-2 rounded"
+          {/* P/P Operator */}
+          <div className="mt-4">
+            <SearchableSelect
+              key={`ppOperator-${resetKey}`}
+              label="P/P Operator"
+              options={operators}
+              displayKey="operatorName"
+              required
+              onSelect={(item) =>
+                setFormData({ ...formData, ppOperator: item.operatorName })
+              }
             />
+          </div>
+
+{/* ================= PRODUCTION SECTION ================= */}
+          <div className="mt-6 border-t pt-4">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-blue-800">Production :</h2>
+              <button 
+                type="button" 
+                onClick={addProduction} 
+                className="bg-blue-600 text-white font-bold px-3 py-1 rounded hover:bg-blue-700"
+              >
+                + Add Row
+              </button>
+            </div>
+
+            {productions.map((prod, index) => (
+              <div key={index} className="border border-blue-200 rounded-lg p-4 mb-4 bg-blue-50 relative">
+                {/* Remove Button (only if more than 1 row) */}
+                {productions.length > 1 && (
+                  <button 
+                    type="button" 
+                    onClick={() => removeProduction(index)} 
+                    className="absolute top-2 right-2 text-red-600 font-bold hover:text-red-800"
+                  >
+                    ✕
+                  </button>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Row 1 */}
+                  <SearchableSelect 
+                    // Use a unique key combining index and resetKey to force clear on submit
+                    key={`prod-comp-${index}-${resetKey}`} 
+                    label="Component Name" 
+                    options={components} 
+                    displayKey="description" 
+                    required 
+                    onSelect={(item) => updateProduction(index, "componentName", item.description)} 
+                  />
+                  
+                  <div>
+                    <label className="font-medium text-sm">Mould Counter No.</label>
+                    <input 
+                      type="number" 
+                      required 
+                      value={prod.mouldCounterNo} 
+                      onChange={(e) => updateProduction(index, "mouldCounterNo", e.target.value)}
+                      className="w-full border p-2 rounded" 
+                    />
+                  </div>
+
+                  {/* Row 2 */}
+                  <div>
+                    <label className="font-medium text-sm">Produced (Calc)</label>
+                    <input 
+                      type="number" 
+                      value={prod.produced} 
+                      readOnly 
+                      className="w-full border p-2 rounded bg-gray-200 cursor-not-allowed" 
+                    />
+                  </div>
+                  <div>
+                    <label className="font-medium text-sm">Poured</label>
+                    <input 
+                      type="number" 
+                      required 
+                      value={prod.poured} 
+                      onChange={(e) => updateProduction(index, "poured", e.target.value)}
+                      className="w-full border p-2 rounded" 
+                    />
+                  </div>
+
+                  {/* Row 3 */}
+                  <div>
+                    <label className="font-medium text-sm">Cycle Time</label>
+                    <input 
+                      type="number" 
+                      required 
+                      value={prod.cycleTime} 
+                      onChange={(e) => updateProduction(index, "cycleTime", e.target.value)}
+                      className="w-full border p-2 rounded" 
+                    />
+                  </div>
+                  <div>
+                    <label className="font-medium text-sm">Moulds Per Hour</label>
+                    <input 
+                      type="number" 
+                      value={prod.mouldsPerHour} 
+                      readOnly 
+                      className="w-full border p-2 rounded bg-gray-200 cursor-not-allowed" 
+                    />
+                  </div>
+                  
+                  {/* Row 4 */}
+                  <div className="md:col-span-2">
+                    <label className="font-medium text-sm">Remarks</label>
+                    <textarea 
+                      value={prod.remarks} 
+                      onChange={(e) => updateProduction(index, "remarks", e.target.value)} 
+                      className="w-full border p-2 rounded h-16"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Next Shift Plan Section */}
