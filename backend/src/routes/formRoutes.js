@@ -13,5 +13,6 @@ router.get("/operators", formController.getOperators);
 // --- Form Transaction Routes ---
 router.get("/forms/last-mould-counter", formController.getLastMouldCounter);
 router.post("/forms", formController.createReport);
+router.get("/forms/download-pdf", formController.downloadAllReports);
 
 module.exports = router;

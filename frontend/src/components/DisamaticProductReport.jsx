@@ -330,6 +330,33 @@ const DisamaticProductReport = () => {
     }
   };
 
+  // --- DOWNLOAD HANDLER ---
+  const handleDownload = async () => {
+    try {
+      const response = await axios.get("http://localhost:5000/api/forms/download-pdf", {
+        responseType: "blob", // Important: indicates we expect a binary file
+      });
+
+      // Create a blob link to download
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `Disamatic_Report_${new Date().toISOString().split('T')[0]}.pdf`);
+      
+      // Append to html link element page
+      document.body.appendChild(link);
+      
+      // Start download
+      link.click();
+
+      // Clean up and remove the link
+      link.parentNode.removeChild(link);
+    } catch (err) {
+      console.error("Download failed", err);
+      toast.error("Failed to download PDF. Ensure reports exist.");
+    }
+  };
+
   return (
     <div>
       <ToastContainer position="top-right" autoClose={3000} theme="colored" />
@@ -953,6 +980,15 @@ const DisamaticProductReport = () => {
           >
             Submit Report
           </button>
+
+          <button
+            type="button"
+            onClick={handleDownload}
+            className="w-full bg-gray-800 text-white py-2 rounded hover:bg-gray-900 mt-4 flex justify-center items-center gap-2"
+          >
+            <span>⬇️</span> Download All Reports (PDF)
+          </button>
+          
         </form>
       </div>
     </div>
