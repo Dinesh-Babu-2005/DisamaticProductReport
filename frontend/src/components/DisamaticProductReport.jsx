@@ -3,18 +3,52 @@ import axios from "axios";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 
-const SearchableSelect = ({ label, options, displayKey, onSelect, required }) => {
-  const [search, setSearch] = useState("");
+// --- HELPER: Calculate Production Date & Shift ---
+const getProductionDateTime = () => {
+  const now = new Date();
+  const hours = now.getHours();
+  const mins = now.getMinutes();
+  const time = hours + mins / 60; 
+
+  let shift = "I";
+  if (time >= 7 && time < 15.5) {
+    shift = "I"; 
+  } else if (time >= 15.5 && time < 24) {
+    shift = "II"; 
+  } else {
+    shift = "III"; 
+  }
+
+  const prodDate = new Date(now);
+  if (hours < 7) {
+    prodDate.setDate(prodDate.getDate() - 1);
+  }
+  
+  const year = prodDate.getFullYear();
+  const month = String(prodDate.getMonth() + 1).padStart(2, '0');
+  const day = String(prodDate.getDate()).padStart(2, '0');
+  
+  return { date: `${year}-${month}-${day}`, shift };
+};
+
+// ==========================================
+// INTERNAL COMPONENT: SearchableSelect
+// ==========================================
+const SearchableSelect = ({ label, options, displayKey, onSelect, required, value }) => {
+  const [search, setSearch] = useState(value || "");
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    setSearch(value || "");
+  }, [value]);
 
   const filtered = options.filter((item) =>
     item[displayKey]?.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
-    <div className="relative">
-      <label className="font-medium">{label}</label>
-
+    <div className="relative w-full">
+      {label && <label className="font-medium text-gray-700 block mb-1">{label}</label>}
       <input
         type="text"
         required={required}
@@ -24,12 +58,11 @@ const SearchableSelect = ({ label, options, displayKey, onSelect, required }) =>
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        className="w-full border p-2 rounded"
-        placeholder={`Search ${label}`}
+        className="w-full border border-gray-300 p-2 rounded focus:outline-none focus:ring-1 focus:ring-orange-500 text-sm"
+        placeholder={`Search ${label || ''}`}
       />
-
       {open && (
-        <ul className="absolute z-10 bg-white border w-full max-h-40 overflow-y-auto rounded shadow">
+        <ul className="absolute z-10 bg-white border border-gray-300 w-full max-h-40 overflow-y-auto rounded shadow-lg mt-1">
           {filtered.length > 0 ? (
             filtered.map((item, index) => (
               <li
@@ -39,13 +72,13 @@ const SearchableSelect = ({ label, options, displayKey, onSelect, required }) =>
                   setOpen(false);
                   onSelect(item);
                 }}
-                className="p-2 hover:bg-gray-100 cursor-pointer"
+                className="p-2 hover:bg-orange-50 cursor-pointer text-sm"
               >
                 {item[displayKey]}
               </li>
             ))
           ) : (
-            <li className="p-2 text-gray-500">No results found</li>
+            <li className="p-2 text-gray-500 text-sm">No results found</li>
           )}
         </ul>
       )}
@@ -53,40 +86,36 @@ const SearchableSelect = ({ label, options, displayKey, onSelect, required }) =>
   );
 };
 
-
+// ==========================================
+// MAIN COMPONENT
+// ==========================================
 const DisamaticProductReport = () => {
-  // 1. Defined Initial States for easy resetting
+  const { date: initDate, shift: initShift } = getProductionDateTime();
+
   const initialFormState = {
     disa: "",
-    date: "",
-    shift: "",
+    date: initDate,
+    shift: initShift,
     incharge: "",
-    member1: "",
-    member2: "",
+    member: "",
     ppOperator: "", 
     significantEvent: "",
     maintenance: "",
     supervisorName: "",
   };
 
-  // ... existing formData state (keep only general fields like date, shift, incharge, etc.)
-
-  // NEW: State for multiple production entries
-  const [productions, setProductions] = useState([
-    {
-      componentName: "",
-      mouldCounterNo: "",
-      produced: 0,
-      poured: "",
-      cycleTime: "",
-      mouldsPerHour: "",
-      remarks: ""
+  const [formData, setFormData] = useState(() => {
+    const savedDraft = localStorage.getItem("disaFormDraft");
+    if (savedDraft) {
+      const parsed = JSON.parse(savedDraft);
+      return { ...parsed, date: initDate, shift: initShift };
     }
+    return initialFormState;
+  });
+
+  const [productions, setProductions] = useState([
+    { componentName: "", pouredWeight: "", mouldCounterNo: "", produced: 0, poured: "", cycleTime: "", mouldsPerHour: "", remarks: "" }
   ]);
-
-  const [formData, setFormData] = useState(initialFormState);
-
-  // 2. Add a Reset Key to force SearchableSelects to clear visually
   const [resetKey, setResetKey] = useState(0);
 
   const [incharges, setIncharges] = useState([]);
@@ -94,43 +123,45 @@ const DisamaticProductReport = () => {
   const [operators, setOperators] = useState([]);
   const [components, setComponents] = useState([]);
   const [previousMouldCounter, setPreviousMouldCounter] = useState(0);
-  
-  const [nextShiftPlans, setNextShiftPlans] = useState([
-    { componentName: "", plannedMoulds: "", remarks: "" },
-  ]);
-  
-  const [delays, setDelays] = useState([
-    { delayType: "", startTime: "", endTime: "", duration: 0 },
-  ]);
-  
+  const [nextShiftPlans, setNextShiftPlans] = useState([{ componentName: "", plannedMoulds: "", remarks: "" }]);
+  const [delays, setDelays] = useState([{ delayType: "", startTime: "", endTime: "", duration: 0 }]);
   const [delaysMaster, setDelaysMaster] = useState([]);
-  
-  const [mouldHardness, setMouldHardness] = useState([
-    { componentName: "", penetrationPP: "", penetrationSP: "", bScalePP: "", bScaleSP: "", remarks: "" },
-  ]);
-  
-  const [patternTemps, setPatternTemps] = useState([
-    { componentName: "", pp: "", sp: "", remarks: "" },
-  ]);
-  
+  const [mouldHardness, setMouldHardness] = useState([{ componentName: "", penetrationPP: "", penetrationSP: "", bScalePP: "", bScaleSP: "", remarks: "" }]);
+  const [patternTemps, setPatternTemps] = useState([{ componentName: "", pp: "", sp: "", remarks: "" }]);
   const [supervisors, setSupervisors] = useState([]);
 
-
-  // --- API Calls ---
   useEffect(() => {
-    const fetchLastCounter = async () => {
-      try {
-        const res = await axios.get(
-          "http://localhost:5000/api/forms/last-mould-counter"
-        );
-        const lastValue = Number(res.data.lastMouldCounter) || 0;
-        setPreviousMouldCounter(lastValue);
-        setFormData((prev) => ({ ...prev, mouldCounterNo: lastValue }));
-      } catch (err) {
-        console.error("Failed to fetch last mould counter", err);
+    localStorage.setItem("disaFormDraft", JSON.stringify(formData));
+  }, [formData]);
+
+  useEffect(() => {
+    const checkOnLoad = async () => {
+      if (formData.disa && formData.date && formData.shift) {
+        try {
+          const res = await axios.get(`http://localhost:5000/api/forms/last-personnel`, {
+            params: { disa: formData.disa, date: formData.date, shift: formData.shift }
+          });
+          if (res.data) {
+            setFormData((prev) => ({
+              ...prev,
+              incharge: res.data.incharge || prev.incharge,
+              member: res.data.member || prev.member,
+              ppOperator: res.data.ppOperator || prev.ppOperator,
+              supervisorName: res.data.supervisorName || prev.supervisorName,
+            }));
+          }
+
+          const counterRes = await axios.get(`http://localhost:5000/api/forms/last-mould-counter`, {
+            params: { disa: formData.disa }
+          });
+          setPreviousMouldCounter(Number(counterRes.data.lastMouldCounter) || 0);
+        } catch (err) {
+          console.error(err);
+        }
       }
     };
-    fetchLastCounter();
+    checkOnLoad();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -142,27 +173,54 @@ const DisamaticProductReport = () => {
     axios.get("http://localhost:5000/api/supervisors").then((res) => setSupervisors(res.data));
   }, []);
 
-  // --- Handlers ---
   const handleChange = (e) => {
     const { name, value } = e.target;
-    if (name === "mouldCounterNo") {
-      const current = Number(value);
-      if (isNaN(current) || current < 0 || current > 600000) return;
-      const produced = Math.max(0, current - previousMouldCounter);
-      setFormData((prev) => ({ ...prev, mouldCounterNo: current, produced }));
-      return;
-    }
-    const numericFields = ["poured", "cycleTime"];
-    setFormData((prev) => ({
-      ...prev,
-      [name]: numericFields.includes(name) ? Number(value) : value,
-    }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  // Next Shift Plan Handlers
-  const addNextShiftPlan = () => {
-    setNextShiftPlans([...nextShiftPlans, { componentName: "", plannedMoulds: "", remarks: "" }]);
+  const handleDisaChange = async (e) => {
+    const selectedDisa = e.target.value;
+    
+    setFormData((prev) => ({ 
+      ...prev, 
+      disa: selectedDisa,
+      incharge: "", member: "", ppOperator: "", supervisorName: ""
+    }));
+
+    if (selectedDisa) {
+      try {
+        const res = await axios.get(`http://localhost:5000/api/forms/last-personnel`, {
+          params: { disa: selectedDisa, date: formData.date, shift: formData.shift }
+        });
+        
+        if (res.data) {
+          setFormData((prev) => ({
+            ...prev,
+            incharge: res.data.incharge || "",
+            member: res.data.member || "",
+            ppOperator: res.data.ppOperator || "",
+            supervisorName: res.data.supervisorName || "",
+          }));
+          toast.success(`Personnel auto-filled for DISA-${selectedDisa}`);
+        } else {
+          toast.info(`First entry for DISA-${selectedDisa} in this shift.`);
+        }
+
+        const counterRes = await axios.get(`http://localhost:5000/api/forms/last-mould-counter`, {
+          params: { disa: selectedDisa }
+        });
+        const fetchedCounter = Number(counterRes.data.lastMouldCounter) || 0;
+        setPreviousMouldCounter(fetchedCounter);
+        
+        recalculateChain(productions, fetchedCounter);
+
+      } catch (err) {
+        console.error("Failed to fetch data", err);
+      }
+    }
   };
+
+  const addNextShiftPlan = () => setNextShiftPlans([...nextShiftPlans, { componentName: "", plannedMoulds: "", remarks: "" }]);
   const updateNextShiftPlan = (index, field, value) => {
     const updated = [...nextShiftPlans];
     updated[index][field] = value;
@@ -173,11 +231,9 @@ const DisamaticProductReport = () => {
     setNextShiftPlans(nextShiftPlans.filter((_, i) => i !== index));
   };
 
-  // Delay Handlers
-  const addDelay = () => {
-    setDelays([...delays, { delayType: "", startTime: "", endTime: "", duration: 0 }]);
-  };
+  const addDelay = () => setDelays([...delays, { delayType: "", startTime: "", endTime: "", duration: 0 }]);
   const removeDelay = (index) => {
+    if (delays.length === 1) return;
     setDelays(delays.filter((_, i) => i !== index));
   };
   const updateDelay = (index, field, value) => {
@@ -195,10 +251,7 @@ const DisamaticProductReport = () => {
     setDelays(updated);
   };
 
-  // Mould Hardness Handlers
-  const addMouldHardness = () => {
-    setMouldHardness([...mouldHardness, { componentName: "", penetrationPP: "", penetrationSP: "", bScalePP: "", bScaleSP: "", remarks: "" }]);
-  };
+  const addMouldHardness = () => setMouldHardness([...mouldHardness, { componentName: "", penetrationPP: "", penetrationSP: "", bScalePP: "", bScaleSP: "", remarks: "" }]);
   const removeMouldHardness = (index) => {
     if (mouldHardness.length === 1) return;
     setMouldHardness(mouldHardness.filter((_, i) => i !== index));
@@ -209,10 +262,7 @@ const DisamaticProductReport = () => {
     setMouldHardness(updated);
   };
 
-  // Pattern Temp Handlers
-  const addPatternTemp = () => {
-    setPatternTemps([...patternTemps, { componentName: "", pp: "", sp: "", remarks: "" }]);
-  };
+  const addPatternTemp = () => setPatternTemps([...patternTemps, { componentName: "", pp: "", sp: "", remarks: "" }]);
   const updatePatternTemp = (index, field, value) => {
     const updated = [...patternTemps];
     updated[index][field] = value;
@@ -223,771 +273,437 @@ const DisamaticProductReport = () => {
     setPatternTemps(patternTemps.filter((_, i) => i !== index));
   };
 
-  // --- PRODUCTION HANDLERS ---
   const addProduction = () => {
-    setProductions([
-      ...productions,
-      { componentName: "", mouldCounterNo: "", produced: 0, poured: "", cycleTime: "", mouldsPerHour: "", remarks: "" }
-    ]);
+    setProductions([...productions, { componentName: "", pouredWeight: "", mouldCounterNo: "", produced: 0, poured: "", cycleTime: "", mouldsPerHour: "", remarks: "" }]);
   };
-
+  
   const removeProduction = (index) => {
     if (productions.length === 1) return;
     const updated = productions.filter((_, i) => i !== index);
-    // Recalculate produced values for the remaining list to keep math correct
     recalculateChain(updated);
   };
 
-  const updateProduction = (index, field, value) => {
-      const updated = [...productions];
-      
-      if (field === "mouldCounterNo") {
-        updated[index][field] = value;
-        // Trigger recalculation of the whole chain when a counter changes
-        recalculateChain(updated);
-      } 
-      else if (field === "poured" || field === "cycleTime") {
-        updated[index][field] = value;
-        
-        // Calculate Moulds Per Hour
-        const p = field === "poured" ? Number(value) : Number(updated[index].poured);
-        const c = field === "cycleTime" ? Number(value) : Number(updated[index].cycleTime);
-        
-        if (p && c) {
-          // CHANGED: Use Math.round() to get a whole number instead of .toFixed(2)
-          updated[index].mouldsPerHour = Math.round((p * c) / 3600);
-        }
-        
-        setProductions(updated);
-      } 
-      else {
-        updated[index][field] = value;
-        setProductions(updated);
+  const updateProduction = (index, field, value, extraValue = null) => {
+    const updated = [...productions];
+    
+    if (field === "componentName") {
+      updated[index].componentName = value;
+      updated[index].pouredWeight = extraValue;
+      setProductions(updated);
+    }
+    else if (field === "mouldCounterNo") {
+      updated[index][field] = value;
+      recalculateChain(updated); 
+    } 
+    else if (field === "cycleTime") {
+      updated[index][field] = value;
+      const c = Number(value);
+      if (c > 0) {
+        updated[index].mouldsPerHour = Math.round(3600 / c);
+      } else {
+        updated[index].mouldsPerHour = "";
       }
-    };
+      setProductions(updated);
+    } 
+    else {
+      updated[index][field] = value;
+      setProductions(updated);
+    }
+  };
 
-  // Helper: Recalculates 'produced' for every row based on the previous row's counter
-  const recalculateChain = (list) => {
-    let prev = previousMouldCounter; // Start with the fetched DB counter
+  const recalculateChain = (list, baseCounter = previousMouldCounter) => {
+    let prev = baseCounter; 
     const newList = list.map((item) => {
       const current = Number(item.mouldCounterNo) || 0;
-      // Produced = Current Counter - Previous Counter (min 0)
       const produced = current ? Math.max(0, current - prev) : 0;
-      if (current) prev = current; // Update 'prev' for the next iteration
+      if (current) prev = current; 
       return { ...item, produced };
     });
     setProductions(newList);
   };
 
-  // Submit Handler
   const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
-      // Send 'productions' array instead of individual fields
       await axios.post("http://localhost:5000/api/forms", {
-        ...formData,
-        productions, 
-        delays,
-        nextShiftPlans,
-        mouldHardness,
-        patternTemps,
+        ...formData, productions, delays, nextShiftPlans, mouldHardness, patternTemps,
       });
 
-      // 1. Update previous counter to match what we just submitted
       const lastItem = productions[productions.length - 1];
       const newPreviousCounter = lastItem.mouldCounterNo 
         ? Number(lastItem.mouldCounterNo) 
         : previousMouldCounter;
-        
       setPreviousMouldCounter(newPreviousCounter);
 
-      // 2. Reset Main Form Data (keeping mouldCounterNo synced to new previous)
-      setFormData(initialFormState);
+      const { date: newDate, shift: newShift } = getProductionDateTime();
+      setFormData((prev) => ({
+        ...initialFormState,
+        disa: prev.disa, 
+        date: newDate,
+        shift: newShift,
+        incharge: prev.incharge,
+        member: prev.member,
+        ppOperator: prev.ppOperator,
+        supervisorName: prev.supervisorName
+      }));
 
-      // 3. Reset All Arrays
-      setProductions([{ 
-        componentName: "", 
-        mouldCounterNo: "", 
-        produced: 0, 
-        poured: "", 
-        cycleTime: "", 
-        mouldsPerHour: "", 
-        remarks: "" 
-      }]);
+      setProductions([{ componentName: "", pouredWeight: "", mouldCounterNo: "", produced: 0, poured: "", cycleTime: "", mouldsPerHour: "", remarks: "" }]);
       setNextShiftPlans([{ componentName: "", plannedMoulds: "", remarks: "" }]);
       setDelays([{ delayType: "", startTime: "", endTime: "", duration: 0 }]);
       setMouldHardness([{ componentName: "", penetrationPP: "", penetrationSP: "", bScalePP: "", bScaleSP: "", remarks: "" }]);
       setPatternTemps([{ componentName: "", pp: "", sp: "", remarks: "" }]);
-
-      // 4. Update Reset Key -> This forces SearchableSelects to re-render and clear their text
       setResetKey((prev) => prev + 1);
 
-      toast.success("Report submitted and form cleared");
+      toast.success("Report submitted! Ready for next entry.");
     } catch (err) {
       console.error(err);
       toast.error("Submission failed");
     }
   };
 
-  // --- DOWNLOAD HANDLER ---
   const handleDownload = async () => {
     try {
-      const response = await axios.get("http://localhost:5000/api/forms/download-pdf", {
-        responseType: "blob", // Important: indicates we expect a binary file
-      });
-
-      // Create a blob link to download
+      const response = await axios.get("http://localhost:5000/api/forms/download-pdf", { responseType: "blob" });
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement("a");
       link.href = url;
       link.setAttribute("download", `Disamatic_Report_${new Date().toISOString().split('T')[0]}.pdf`);
-      
-      // Append to html link element page
       document.body.appendChild(link);
-      
-      // Start download
       link.click();
-
-      // Clean up and remove the link
       link.parentNode.removeChild(link);
     } catch (err) {
       console.error("Download failed", err);
-      toast.error("Failed to download PDF. Ensure reports exist.");
+      toast.error("Failed to download PDF.");
     }
   };
 
   return (
-    <div>
+    <div className="min-h-screen bg-[#2d2d2d] flex flex-col items-center justify-center p-6">
       <ToastContainer position="top-right" autoClose={3000} theme="colored" />
-      <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-        <form
-          onSubmit={handleSubmit}
-          className="bg-white w-full max-w-3xl rounded-xl shadow-lg p-6 space-y-4"
-        >
-          <h1 className="text-2xl font-bold text-center">
-            DISAMATIC PRODUCT REPORT
-          </h1>
+      
+      <div className="bg-white w-full max-w-[90rem] rounded-xl p-8 shadow-2xl overflow-x-auto">
+        <h2 className="text-2xl font-bold mb-6 text-center text-gray-800">
+          DISAMATIC PRODUCTION REPORT
+        </h2>
 
-          {/* DISA */}
-          <div>
-            <label className="font-medium">DISA-</label>
-            <select
-              name="disa"
-              required
-              value={formData.disa}
-              onChange={handleChange}
-              className="w-full border p-2 rounded"
-            >
-              <option value="">Select</option>
-              <option value="I">I</option>
-              <option value="II">II</option>
-              <option value="III">III</option>
-            </select>
-          </div>
-
-          {/* Date */}
-          <div>
-            <label className="font-medium">Date</label>
-            <input
-              type="date"
-              name="date"
-              required
-              value={formData.date}
-              onChange={handleChange}
-              className="w-full border p-2 rounded"
-            />
-          </div>
-
-          {/* Shift */}
-          <div>
-            <label className="font-medium">Shift</label>
-            <select
-              name="shift"
-              required
-              value={formData.shift}
-              onChange={handleChange}
-              className="w-full border p-2 rounded"
-            >
-              <option value="">Select</option>
-              <option value="I">I</option>
-              <option value="II">II</option>
-              <option value="III">III</option>
-            </select>
-          </div>
-
-          {/* Incharge */}
-          <div>
-            <SearchableSelect
-              key={`incharge-${resetKey}`}
-              label="Incharge"
-              options={incharges}
-              displayKey="name"
-              required
-              onSelect={(item) =>
-                setFormData({ ...formData, incharge: item.name })
-              }
-            />
-          </div>
-
-          {/* Members */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <form onSubmit={handleSubmit} className="min-w-[1100px] flex flex-col gap-6">
+          
+          <div className="grid grid-cols-3 gap-6 bg-gray-100 p-4 rounded-lg border border-gray-300">
             <div>
-              <SearchableSelect
-                key={`member1-${resetKey}`}
-                label="Member 1"
-                options={employees}
-                displayKey="name"
-                required
-                onSelect={(item) =>
-                  setFormData({ ...formData, member1: item.name })
-                }
-              />
+              <label className="font-bold text-gray-700 block mb-1">DISA- *</label>
+              <select name="disa" required value={formData.disa} onChange={handleDisaChange} className="w-full border border-gray-300 p-2 rounded focus:outline-none focus:ring-1 focus:ring-orange-500">
+                <option value="">Select</option>
+                <option value="I">I</option>
+                <option value="II">II</option>
+                <option value="III">III</option>
+                <option value="IV">IV</option>
+              </select>
             </div>
-
             <div>
-              <SearchableSelect
-                key={`member2-${resetKey}`}
-                label="Member 2"
-                options={employees}
-                displayKey="name"
-                required
-                onSelect={(item) =>
-                  setFormData({ ...formData, member2: item.name })
-                }
-              />
+              <label className="font-bold text-gray-700 block mb-1">Date</label>
+              <input type="date" name="date" required value={formData.date} readOnly className="w-full border border-gray-300 p-2 rounded bg-gray-200 cursor-not-allowed text-gray-600 outline-none" />
+            </div>
+            <div>
+              <label className="font-bold text-gray-700 block mb-1">Shift</label>
+              <select name="shift" required value={formData.shift} disabled className="w-full border border-gray-300 p-2 rounded bg-gray-200 cursor-not-allowed text-gray-600 appearance-none">
+                <option value="I">I (7 AM - 3:30 PM)</option>
+                <option value="II">II (3:30 PM - 12 AM)</option>
+                <option value="III">III (12 AM - 7 AM)</option>
+              </select>
             </div>
           </div>
 
-          {/* P/P Operator */}
-          <div className="mt-4">
-            <SearchableSelect
-              key={`ppOperator-${resetKey}`}
-              label="P/P Operator"
-              options={operators}
-              displayKey="operatorName"
-              required
-              onSelect={(item) =>
-                setFormData({ ...formData, ppOperator: item.operatorName })
-              }
-            />
+          <div className="grid grid-cols-3 gap-6">
+            <SearchableSelect key={`incharge-${resetKey}`} label="Incharge *" options={incharges} displayKey="name" required value={formData.incharge} onSelect={(item) => setFormData({ ...formData, incharge: item.name })} />
+            <SearchableSelect key={`ppOperator-${resetKey}`} label="P/P Operator *" options={operators} displayKey="operatorName" required value={formData.ppOperator} onSelect={(item) => setFormData({ ...formData, ppOperator: item.operatorName })} />
+            <SearchableSelect key={`member-${resetKey}`} label="Member *" options={employees} displayKey="name" required value={formData.member} onSelect={(item) => setFormData({ ...formData, member: item.name })} />
           </div>
 
-{/* ================= PRODUCTION SECTION ================= */}
+          {/* PRODUCTION SECTION */}
           <div className="mt-6 border-t pt-4">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-blue-800">Production :</h2>
-              <button 
-                type="button" 
-                onClick={addProduction} 
-                className="bg-blue-600 text-white font-bold px-3 py-1 rounded hover:bg-blue-700"
-              >
-                + Add Row
-              </button>
+              <h2 className="text-lg font-bold text-gray-800">Production :</h2>
+              <button type="button" onClick={addProduction} className="bg-orange-500 hover:bg-orange-600 text-white font-bold px-3 py-1 rounded flex items-center justify-center leading-none" title="Add Row">+ Add Row</button>
             </div>
 
             {productions.map((prod, index) => (
-              <div key={index} className="border border-blue-200 rounded-lg p-4 mb-4 bg-blue-50 relative">
-                {/* Remove Button (only if more than 1 row) */}
+              <div key={index} className="border border-gray-200 rounded-lg p-4 mb-4 bg-gray-50 relative">
                 {productions.length > 1 && (
-                  <button 
-                    type="button" 
-                    onClick={() => removeProduction(index)} 
-                    className="absolute top-2 right-2 text-red-600 font-bold hover:text-red-800"
-                  >
-                    ✕
-                  </button>
+                  <button type="button" onClick={() => removeProduction(index)} className="absolute top-2 right-2 text-red-600 font-bold hover:text-red-800">✕</button>
                 )}
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Row 1 */}
-                  <SearchableSelect 
-                    // Use a unique key combining index and resetKey to force clear on submit
-                    key={`prod-comp-${index}-${resetKey}`} 
-                    label="Component Name" 
-                    options={components} 
-                    displayKey="description" 
-                    required 
-                    onSelect={(item) => updateProduction(index, "componentName", item.description)} 
-                  />
                   
                   <div>
-                    <label className="font-medium text-sm">Mould Counter No.</label>
-                    <input 
-                      type="number" 
+                    <label className="font-medium text-sm text-gray-700">Mould Counter No. *</label>
+                    <input type="number" required value={prod.mouldCounterNo} onChange={(e) => updateProduction(index, "mouldCounterNo", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500" />
+                  </div>
+                  <div>
+                    <label className="font-medium text-sm text-gray-700 block mb-1">Component Name *</label>
+                    <SearchableSelect 
+                      key={`prod-comp-${index}-${resetKey}`} 
+                      options={components} 
+                      displayKey="description" 
                       required 
-                      value={prod.mouldCounterNo} 
-                      onChange={(e) => updateProduction(index, "mouldCounterNo", e.target.value)}
-                      className="w-full border p-2 rounded" 
+                      value={prod.componentName} 
+                      onSelect={(item) => updateProduction(index, "componentName", item.description, item.pouredWeight)} 
                     />
-                  </div>
-
-                  {/* Row 2 */}
-                  <div>
-                    <label className="font-medium text-sm">Produced (Calc)</label>
-                    <input 
-                      type="number" 
-                      value={prod.produced} 
-                      readOnly 
-                      className="w-full border p-2 rounded bg-gray-200 cursor-not-allowed" 
-                    />
+                    {prod.pouredWeight != null && prod.pouredWeight !== "" && (
+                      <p className="text-sm font-semibold text-blue-600 mt-2 ml-1">
+                        Poured Weight: {prod.pouredWeight}
+                      </p>
+                    )}
                   </div>
                   <div>
-                    <label className="font-medium text-sm">Poured</label>
-                    <input 
-                      type="number" 
-                      required 
-                      value={prod.poured} 
-                      onChange={(e) => updateProduction(index, "poured", e.target.value)}
-                      className="w-full border p-2 rounded" 
-                    />
-                  </div>
-
-                  {/* Row 3 */}
-                  <div>
-                    <label className="font-medium text-sm">Cycle Time</label>
-                    <input 
-                      type="number" 
-                      required 
-                      value={prod.cycleTime} 
-                      onChange={(e) => updateProduction(index, "cycleTime", e.target.value)}
-                      className="w-full border p-2 rounded" 
-                    />
+                    <label className="font-medium text-sm text-gray-500">Produced (Updates Previous Form)</label>
+                    <input type="number" value={prod.produced} readOnly className="w-full border border-gray-300 p-2 rounded bg-gray-200 cursor-not-allowed text-gray-600" />
                   </div>
                   <div>
-                    <label className="font-medium text-sm">Moulds Per Hour</label>
-                    <input 
-                      type="number" 
-                      value={prod.mouldsPerHour} 
-                      readOnly 
-                      className="w-full border p-2 rounded bg-gray-200 cursor-not-allowed" 
-                    />
+                    <label className="font-medium text-sm text-gray-700">Poured *</label>
+                    <input type="number" required value={prod.poured} onChange={(e) => updateProduction(index, "poured", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500" />
                   </div>
-                  
-                  {/* Row 4 */}
+                  <div>
+                    <label className="font-medium text-sm text-gray-700">Cycle Time *</label>
+                    <input type="number" step="0.01" required value={prod.cycleTime} onChange={(e) => updateProduction(index, "cycleTime", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500" />
+                  </div>
+                  <div>
+                    <label className="font-medium text-sm text-gray-500">Moulds Per Hour (Auto-Calculated)</label>
+                    <input type="number" value={prod.mouldsPerHour} readOnly className="w-full border border-gray-300 p-2 rounded bg-gray-200 cursor-not-allowed text-gray-600" />
+                  </div>
                   <div className="md:col-span-2">
-                    <label className="font-medium text-sm">Remarks</label>
-                    <textarea 
-                      value={prod.remarks} 
-                      onChange={(e) => updateProduction(index, "remarks", e.target.value)} 
-                      className="w-full border p-2 rounded h-16"
-                    />
+                    <label className="font-medium text-sm text-gray-700">Remarks</label>
+                    <textarea value={prod.remarks} onChange={(e) => updateProduction(index, "remarks", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500 h-10 resize-y" />
                   </div>
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Next Shift Plan Section */}
-          <div className="mt-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Next Shift Plan :</h2>
-              <button
-                type="button"
-                onClick={addNextShiftPlan}
-                className="text-xl font-bold px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
-              >
-                +
-              </button>
+          {/* NEXT SHIFT PLAN */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg font-bold text-gray-800">Next Shift Plan :</h2>
+              <button type="button" onClick={addNextShiftPlan} className="bg-orange-500 hover:bg-orange-600 text-white w-6 h-6 rounded flex items-center justify-center font-bold text-lg leading-none">+</button>
             </div>
-
-            {nextShiftPlans.map((plan, index) => (
-              <div
-                key={index}
-                className="border rounded-lg p-4 mt-4 space-y-4 bg-gray-50"
-              >
-                <div className="flex justify-between items-center">
-                  <h3 className="font-medium">Plan {index + 1}</h3>
-                  {nextShiftPlans.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeNextShiftPlan(index)}
-                      className="text-red-600 font-bold"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-
-                <SearchableSelect
-                  key={`nextPlan-${index}-${resetKey}`}
-                  label="Component Name"
-                  options={components}
-                  displayKey="description"
-                  required
-                  onSelect={(item) =>
-                    updateNextShiftPlan(index, "componentName", item.description)
-                  }
-                />
-
-                <div>
-                  <label className="font-medium">Planned Moulds *</label>
-                  <input
-                    type="number"
-                    min={1}
-                    required
-                    value={plan.plannedMoulds}
-                    onChange={(e) =>
-                      updateNextShiftPlan(index, "plannedMoulds", e.target.value)
-                    }
-                    className="w-full border p-2 rounded"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-medium">Remarks</label>
-                  <textarea
-                    value={plan.remarks}
-                    onChange={(e) =>
-                      updateNextShiftPlan(index, "remarks", e.target.value)
-                    }
-                    className="w-full border p-2 rounded"
-                  />
-                </div>
-              </div>
-            ))}
+            <table className="w-full border-collapse border border-gray-300 text-sm">
+              <thead className="bg-gray-100 text-gray-700">
+                <tr>
+                  <th className="border border-gray-300 p-2 text-left w-1/3">Component Name *</th>
+                  <th className="border border-gray-300 p-2 w-48">Planned Moulds *</th>
+                  <th className="border border-gray-300 p-2">Remarks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nextShiftPlans.map((plan, index) => (
+                  <tr key={index} className="bg-white">
+                    <td className="border border-gray-300 p-2 align-top">
+                      <SearchableSelect key={`nextPlan-${index}-${resetKey}`} options={components} displayKey="description" required value={plan.componentName} onSelect={(item) => updateNextShiftPlan(index, "componentName", item.description)} />
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <input type="number" min={1} required value={plan.plannedMoulds} onChange={(e) => updateNextShiftPlan(index, "plannedMoulds", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500" />
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <div className="flex gap-2">
+                        <textarea value={plan.remarks} onChange={(e) => updateNextShiftPlan(index, "remarks", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500 h-10 resize-y" />
+                        {nextShiftPlans.length > 1 && <button type="button" onClick={() => removeNextShiftPlan(index)} className="text-red-500 font-bold hover:text-red-700 px-2">✕</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          {/* ================= DELAYS SECTION ================= */}
-          <div className="mt-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Delays :</h2>
-              <button
-                type="button"
-                onClick={addDelay}
-                className="text-xl font-bold px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
-              >
-                +
-              </button>
+          {/* DELAYS */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg font-bold text-gray-800">Delays :</h2>
+              <button type="button" onClick={addDelay} className="bg-orange-500 hover:bg-orange-600 text-white w-6 h-6 rounded flex items-center justify-center font-bold text-lg leading-none">+</button>
             </div>
-
-            {delays.map((delay, index) => (
-              <div
-                key={index}
-                className="border rounded-lg p-4 mt-4 space-y-4 bg-gray-50"
-              >
-                <div className="flex justify-between items-center">
-                  <h3 className="font-medium">Delay {index + 1}</h3>
-                  {delays.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeDelay(index)}
-                      className="text-red-600 font-bold"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-
-                <SearchableSelect
-                  key={`delay-${index}-${resetKey}`}
-                  label="Delay"
-                  options={delaysMaster}
-                  displayKey="reasonName"
-                  required
-                  onSelect={(item) =>
-                    updateDelay(index, "delayType", item.reasonName)
-                  }
-                />
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="font-medium">Start Time</label>
-                    <input
-                      type="time"
-                      required
-                      value={delay.startTime}
-                      onChange={(e) =>
-                        updateDelay(index, "startTime", e.target.value)
-                      }
-                      className="w-full border p-2 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium">End Time</label>
-                    <input
-                      type="time"
-                      required
-                      value={delay.endTime}
-                      onChange={(e) =>
-                        updateDelay(index, "endTime", e.target.value)
-                      }
-                      className="w-full border p-2 rounded"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="font-medium">Duration (Minutes)</label>
-                  <input
-                    type="number"
-                    value={delay.duration}
-                    readOnly
-                    className="w-full border p-2 rounded bg-gray-100 cursor-not-allowed"
-                  />
-                </div>
-              </div>
-            ))}
+            <table className="w-full border-collapse border border-gray-300 text-sm">
+              <thead className="bg-gray-100 text-gray-700">
+                <tr>
+                  <th className="border border-gray-300 p-2 text-left w-1/3">Reason *</th>
+                  <th className="border border-gray-300 p-2 w-48">Start Time *</th>
+                  <th className="border border-gray-300 p-2 w-48">End Time *</th>
+                  <th className="border border-gray-300 p-2">Duration (Mins)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {delays.map((delay, index) => (
+                  <tr key={index} className="bg-white">
+                    <td className="border border-gray-300 p-2 align-top">
+                      <SearchableSelect key={`delay-${index}-${resetKey}`} options={delaysMaster} displayKey="reasonName" required value={delay.delayType} onSelect={(item) => updateDelay(index, "delayType", item.reasonName)} />
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <input type="time" required value={delay.startTime} onChange={(e) => updateDelay(index, "startTime", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500" />
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <input type="time" required value={delay.endTime} onChange={(e) => updateDelay(index, "endTime", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500" />
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <div className="flex gap-2">
+                        <input type="number" value={delay.duration} readOnly className="w-full border border-gray-300 p-2 rounded bg-gray-100 cursor-not-allowed text-gray-600" />
+                        {delays.length > 1 && <button type="button" onClick={() => removeDelay(index)} className="text-red-500 font-bold hover:text-red-700 px-2">✕</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          {/* ================= MOULD HARDNESS SECTION ================= */}
-          <div className="mt-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Mould Hardness :</h2>
-              <button
-                type="button"
-                onClick={addMouldHardness}
-                className="text-xl font-bold px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
-              >
-                +
-              </button>
+          {/* MOULD HARDNESS */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg font-bold text-gray-800">Mould Hardness :</h2>
+              <button type="button" onClick={addMouldHardness} className="bg-orange-500 hover:bg-orange-600 text-white w-6 h-6 rounded flex items-center justify-center font-bold text-lg leading-none">+</button>
             </div>
-
-            {mouldHardness.map((item, index) => (
-              <div
-                key={index}
-                className="border rounded-lg p-4 mt-4 space-y-4 bg-gray-50"
-              >
-                <div className="flex justify-between items-center">
-                  <h3 className="font-medium">Mould Hardness {index + 1}</h3>
-                  {mouldHardness.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removeMouldHardness(index)}
-                      className="text-red-600 font-bold"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-
-                <SearchableSelect
-                  key={`hardness-${index}-${resetKey}`}
-                  label="Component Name"
-                  options={components}
-                  displayKey="description"
-                  required
-                  onSelect={(comp) =>
-                    updateMouldHardness(index, "componentName", comp.description)
-                  }
-                />
-
-                <h3 className="font-semibold mt-2">
-                  Mould Penetration Tester (N/cm²)
-                </h3>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="font-medium">PP *</label>
-                    <input
-                      type="number"
-                      min={20}
-                      step="0.01"  // <--- ALLOWS DECIMALS
-                      required
-                      value={item.penetrationPP}
-                      onChange={(e) =>
-                        updateMouldHardness(index, "penetrationPP", e.target.value)
-                      }
-                      className="w-full border p-2 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium">SP *</label>
-                    <input
-                      type="number"
-                      min={20}
-                      step="0.01"  // <--- ALLOWS DECIMALS
-                      required
-                      value={item.penetrationSP}
-                      onChange={(e) =>
-                        updateMouldHardness(index, "penetrationSP", e.target.value)
-                      }
-                      className="w-full border p-2 rounded"
-                    />
-                  </div>
-                </div>
-
-                <h3 className="font-semibold mt-2">B-Scale</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="font-medium">PP *</label>
-                    <input
-                      type="number"
-                      min={85}
-                      required
-                      value={item.bScalePP}
-                      onChange={(e) =>
-                        updateMouldHardness(index, "bScalePP", e.target.value)
-                      }
-                      className="w-full border p-2 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium">SP *</label>
-                    <input
-                      type="number"
-                      min={85}
-                      required
-                      value={item.bScaleSP}
-                      onChange={(e) =>
-                        updateMouldHardness(index, "bScaleSP", e.target.value)
-                      }
-                      className="w-full border p-2 rounded"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="font-medium">Remarks</label>
-                  <textarea
-                    value={item.remarks}
-                    onChange={(e) =>
-                      updateMouldHardness(index, "remarks", e.target.value)
-                    }
-                    className="w-full border p-2 rounded"
-                  />
-                </div>
-              </div>
-            ))}
+            <table className="w-full border-collapse border border-gray-300 text-sm">
+              <thead className="bg-gray-100 text-gray-700">
+                <tr>
+                  <th rowSpan="2" className="border border-gray-300 p-2 text-left w-64 align-middle">Component Name *</th>
+                  <th colSpan="2" className="border border-gray-300 p-1 text-center bg-gray-200">Penetration (N/cm²)</th>
+                  <th colSpan="2" className="border border-gray-300 p-1 text-center bg-gray-200">B-Scale</th>
+                  <th rowSpan="2" className="border border-gray-300 p-2 align-middle">Remarks</th>
+                </tr>
+                <tr>
+                  <th className="border border-gray-300 p-2 w-24">PP *</th>
+                  <th className="border border-gray-300 p-2 w-24">SP *</th>
+                  <th className="border border-gray-300 p-2 w-24">PP *</th>
+                  <th className="border border-gray-300 p-2 w-24">SP *</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mouldHardness.map((item, index) => (
+                  <tr key={index} className="bg-white">
+                    <td className="border border-gray-300 p-2 align-top">
+                      <SearchableSelect key={`hardness-${index}-${resetKey}`} options={components} displayKey="description" required value={item.componentName} onSelect={(comp) => updateMouldHardness(index, "componentName", comp.description)} />
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <input 
+                        type="number" step="0.01" required 
+                        value={item.penetrationPP} 
+                        onChange={(e) => updateMouldHardness(index, "penetrationPP", e.target.value)} 
+                        className={`w-full border border-gray-300 p-2 rounded focus:outline-orange-500 ${item.penetrationPP && Number(item.penetrationPP) < 20 ? 'border-red-500' : ''}`} 
+                      />
+                      {item.penetrationPP && Number(item.penetrationPP) < 20 && <p className="text-red-500 text-xs mt-1 font-medium">Min: 20</p>}
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <input 
+                        type="number" step="0.01" required 
+                        value={item.penetrationSP} 
+                        onChange={(e) => updateMouldHardness(index, "penetrationSP", e.target.value)} 
+                        className={`w-full border border-gray-300 p-2 rounded focus:outline-orange-500 ${item.penetrationSP && Number(item.penetrationSP) < 20 ? 'border-red-500' : ''}`} 
+                      />
+                      {item.penetrationSP && Number(item.penetrationSP) < 20 && <p className="text-red-500 text-xs mt-1 font-medium">Min: 20</p>}
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <input 
+                        type="number" required 
+                        value={item.bScalePP} 
+                        onChange={(e) => updateMouldHardness(index, "bScalePP", e.target.value)} 
+                        className={`w-full border border-gray-300 p-2 rounded focus:outline-orange-500 ${item.bScalePP && Number(item.bScalePP) < 85 ? 'border-red-500' : ''}`} 
+                      />
+                      {item.bScalePP && Number(item.bScalePP) < 85 && <p className="text-red-500 text-xs mt-1 font-medium">Min: 85</p>}
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <input 
+                        type="number" required 
+                        value={item.bScaleSP} 
+                        onChange={(e) => updateMouldHardness(index, "bScaleSP", e.target.value)} 
+                        className={`w-full border border-gray-300 p-2 rounded focus:outline-orange-500 ${item.bScaleSP && Number(item.bScaleSP) < 85 ? 'border-red-500' : ''}`} 
+                      />
+                      {item.bScaleSP && Number(item.bScaleSP) < 85 && <p className="text-red-500 text-xs mt-1 font-medium">Min: 85</p>}
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <div className="flex gap-2">
+                        <textarea value={item.remarks} onChange={(e) => updateMouldHardness(index, "remarks", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500 h-10 resize-y" />
+                        {mouldHardness.length > 1 && <button type="button" onClick={() => removeMouldHardness(index)} className="text-red-500 font-bold hover:text-red-700 px-2">✕</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          {/* ================= PATTERN TEMPERATURE SECTION ================= */}
-          <div className="mt-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Pattern Temp. (°C) :</h2>
-              <button
-                type="button"
-                onClick={addPatternTemp}
-                className="text-xl font-bold px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700"
-              >
-                +
-              </button>
+          {/* PATTERN TEMPERATURE */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg font-bold text-gray-800">Pattern Temp. (°C) :</h2>
+              <button type="button" onClick={addPatternTemp} className="bg-orange-500 hover:bg-orange-600 text-white w-6 h-6 rounded flex items-center justify-center font-bold text-lg leading-none">+</button>
             </div>
-
-            {patternTemps.map((pt, index) => (
-              <div
-                key={index}
-                className="border rounded-lg p-4 mt-4 space-y-4 bg-gray-50"
-              >
-                <div className="flex justify-between items-center">
-                  <h3 className="font-medium">Pattern Temp {index + 1}</h3>
-                  {patternTemps.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => removePatternTemp(index)}
-                      className="text-red-600 font-bold"
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
-
-                <SearchableSelect
-                  key={`patternTemp-${index}-${resetKey}`}
-                  label="Item (Component)"
-                  options={components}
-                  displayKey="description"
-                  required
-                  onSelect={(item) =>
-                    updatePatternTemp(index, "componentName", item.description)
-                  }
-                />
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="font-medium">PP *</label>
-                    <input
-                      type="number"
-                      min={45}
-                      required
-                      value={pt.pp}
-                      onChange={(e) =>
-                        updatePatternTemp(index, "pp", e.target.value)
-                      }
-                      className="w-full border p-2 rounded"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium">SP *</label>
-                    <input
-                      type="number"
-                      min={45}
-                      required
-                      value={pt.sp}
-                      onChange={(e) =>
-                        updatePatternTemp(index, "sp", e.target.value)
-                      }
-                      className="w-full border p-2 rounded"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="font-medium">Remarks</label>
-                  <textarea
-                    value={pt.remarks}
-                    onChange={(e) =>
-                      updatePatternTemp(index, "remarks", e.target.value)
-                    }
-                    className="w-full border p-2 rounded"
-                  />
-                </div>
-              </div>
-            ))}
+            <table className="w-full border-collapse border border-gray-300 text-sm">
+              <thead className="bg-gray-100 text-gray-700">
+                <tr>
+                  <th className="border border-gray-300 p-2 text-left w-1/3">Component Name *</th>
+                  <th className="border border-gray-300 p-2 w-32">PP *</th>
+                  <th className="border border-gray-300 p-2 w-32">SP *</th>
+                  <th className="border border-gray-300 p-2">Remarks</th>
+                </tr>
+              </thead>
+              <tbody>
+                {patternTemps.map((pt, index) => (
+                  <tr key={index} className="bg-white">
+                    <td className="border border-gray-300 p-2 align-top">
+                      <SearchableSelect key={`patternTemp-${index}-${resetKey}`} options={components} displayKey="description" required value={pt.componentName} onSelect={(item) => updatePatternTemp(index, "componentName", item.description)} />
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <input 
+                        type="number" min={45} required 
+                        value={pt.pp} 
+                        onChange={(e) => updatePatternTemp(index, "pp", e.target.value)} 
+                        className={`w-full border border-gray-300 p-2 rounded focus:outline-orange-500 ${pt.pp && Number(pt.pp) < 45 ? 'border-red-500' : ''}`} 
+                      />
+                      {pt.pp && Number(pt.pp) < 45 && <p className="text-red-500 text-xs mt-1 font-medium">Min: 45</p>}
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <input 
+                        type="number" min={45} required 
+                        value={pt.sp} 
+                        onChange={(e) => updatePatternTemp(index, "sp", e.target.value)} 
+                        className={`w-full border border-gray-300 p-2 rounded focus:outline-orange-500 ${pt.sp && Number(pt.sp) < 45 ? 'border-red-500' : ''}`} 
+                      />
+                      {pt.sp && Number(pt.sp) < 45 && <p className="text-red-500 text-xs mt-1 font-medium">Min: 45</p>}
+                    </td>
+                    <td className="border border-gray-300 p-2 align-top">
+                      <div className="flex gap-2">
+                        <textarea value={pt.remarks} onChange={(e) => updatePatternTemp(index, "remarks", e.target.value)} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500 h-10 resize-y" />
+                        {patternTemps.length > 1 && <button type="button" onClick={() => removePatternTemp(index)} className="text-red-500 font-bold hover:text-red-700 px-2">✕</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          {/* ================= OTHER DETAILS ================= */}
-          <div className="mt-6 border-t pt-6">
+          {/* OTHER DETAILS */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
             <div>
-              <label className="font-medium">Significant Event</label>
-              <textarea
-                name="significantEvent"
-                value={formData.significantEvent}
-                onChange={handleChange}
-                className="w-full border p-2 rounded"
-                placeholder="Enter any significant event..."
-              />
+              <label className="font-bold text-gray-700 block mb-1">Significant Event</label>
+              <textarea name="significantEvent" value={formData.significantEvent} onChange={handleChange} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500 h-20 resize-y" placeholder="Enter any significant event..." />
             </div>
-
-            <div className="mt-4">
-              <label className="font-medium">Maintenance</label>
-              <textarea
-                name="maintenance"
-                value={formData.maintenance}
-                onChange={handleChange}
-                className="w-full border p-2 rounded"
-                placeholder="Enter maintenance details..."
-              />
-            </div>
-
-            <div className="mt-4">
-              <SearchableSelect
-                key={`supervisor-${resetKey}`}
-                label="Supervisor Name"
-                options={supervisors}
-                displayKey="supervisorName"
-                required
-                onSelect={(item) =>
-                  setFormData({ ...formData, supervisorName: item.supervisorName })
-                }
-              />
+            <div>
+              <label className="font-bold text-gray-700 block mb-1">Maintenance</label>
+              <textarea name="maintenance" value={formData.maintenance} onChange={handleChange} className="w-full border border-gray-300 p-2 rounded focus:outline-orange-500 h-20 resize-y" placeholder="Enter maintenance details..." />
             </div>
           </div>
+          
+          <div className="w-1/3">
+            <SearchableSelect key={`supervisor-${resetKey}`} label="Supervisor Name *" options={supervisors} displayKey="supervisorName" required value={formData.supervisorName} onSelect={(item) => setFormData({ ...formData, supervisorName: item.supervisorName })} />
+          </div>
 
-          <button
-            type="submit"
-            className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
-          >
-            Submit Report
-          </button>
-
-          <button
-            type="button"
-            onClick={handleDownload}
-            className="w-full bg-gray-800 text-white py-2 rounded hover:bg-gray-900 mt-4 flex justify-center items-center gap-2"
-          >
-            <span>⬇️</span> Download All Reports (PDF)
-          </button>
+          {/* BUTTONS */}
+          <div className="flex justify-end gap-4 mt-6">
+            <button type="button" onClick={handleDownload} className="bg-gray-800 hover:bg-gray-900 text-white px-6 py-2 rounded font-bold transition-colors flex items-center gap-2">
+              <span>⬇️</span> Generate Report (PDF)
+            </button>
+            <button type="submit" className="bg-orange-500 hover:bg-orange-600 text-white px-8 py-2 rounded font-bold transition-colors shadow-md">
+              Submit Form
+            </button>
+          </div>
           
         </form>
       </div>
