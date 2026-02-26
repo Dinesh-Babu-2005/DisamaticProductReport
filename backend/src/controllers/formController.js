@@ -8,7 +8,8 @@ const path = require("path");
 // ==========================================
 exports.getComponents = async (req, res) => {
   try {
-    const result = await sql.query("SELECT code, description, pouredWeight FROM Component");
+    // ⬇️ MAKE SURE "cavity" IS IN THIS QUERY ⬇️
+    const result = await sql.query("SELECT code, description, pouredWeight, cavity FROM Component");
     res.json(result.recordset);
   } catch (err) {
     res.status(500).json({ message: "Failed to fetch components" });

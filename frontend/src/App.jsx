@@ -1,8 +1,9 @@
+import DailyProductionPerformance from "./components/DailyProductionPerformance";
 import DisamaticProductReport from "./components/DisamaticProductReport";
 
 
 function App() {
-  return <DisamaticProductReport />;
+  return <DailyProductionPerformance />;
 }
 
 export default App;
